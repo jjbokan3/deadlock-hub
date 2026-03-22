@@ -26,10 +26,19 @@ deadlock-patch-tool/
 ├── index_generator.py   # Generates site/deadlock/index.html listing page with hero pills + stats
 ├── server.py            # Static file server for site/ directory (point Cloudflare tunnel here)
 ├── watcher.py           # Polls RSS feed, auto-runs pipeline on new patches, regenerates index
+├── dashboard.py         # Dev dashboard: service status, logs, cache mgmt, manual poll, deploy
+├── deploy.sh            # Pull latest to prod, install deps, restart launchd services
 ├── debug_items.py       # Diagnostic: dumps raw API item fields to find category field name
 ├── requirements.txt     # requests, rich (core); anthropic/openai (optional LLM)
 ├── .env                 # (user-created) ANTHROPIC_API_KEY, etc.
 ├── .cache/              # Auto-created. heroes.json, items.json (6hr TTL), seen_patches.json
+├── logs/                # Service logs (created by launchd, gitignored)
+│
+├── launchd/             # macOS launchd service definitions
+│   ├── install.sh       # One-time setup: creates prod clone, symlinks plists, loads services
+│   ├── io.josephbokan.deadlock-server.plist    # Prod server on port 8085
+│   ├── io.josephbokan.deadlock-watcher.plist   # RSS watcher (polls every 5 min)
+│   └── io.josephbokan.deadlock-dashboard.plist # Dashboard on port 8087
 │
 ├── api/
 │   └── __init__.py      # DeadlockAPI class
@@ -86,24 +95,64 @@ deadlock-patch-tool/
 
 ## Deployment (Mac Mini)
 
+### Prod (background services via launchd)
+
 ```bash
-# Server: serves site/ on port 8080
-python3 server.py --port 8080
+# One-time setup: creates prod clone, installs deps, loads launchd services
+cd launchd && ./install.sh
 
-# Watcher: polls RSS every 5 min, generates patches, regenerates index
-python3 watcher.py --interval 300 --llm heuristic --output-dir ./site/deadlock
-
-# Cloudflare tunnel: games.josephbokan.io → http://localhost:8080
+# Services run automatically:
+#   Prod server:  localhost:8085 (Cloudflare tunnel target)
+#   Watcher:      polls RSS every 5 min
+#   Dashboard:    localhost:8087 (local only)
 ```
+
+### Dev (manual)
+
+```bash
+# Dev server on port 8086
+uv run server.py --port 8086
+
+# Dev watcher (single run)
+uv run watcher.py --once --llm heuristic --output-dir ./site/deadlock/updates
+
+# Dashboard (for dev)
+uv run dashboard.py --port 8087
+```
+
+### Deploying to prod
+
+```bash
+# Option 1: Dashboard button at localhost:8087 → "Pull & Restart"
+# Option 2: Manual
+./deploy.sh
+```
+
+### Directory layout
+
+```
+/Users/josephbokan/deadlock-patch-tool/          ← Dev working copy
+/Users/josephbokan/deadlock-patch-tool-prod/     ← Prod clone (auto-deployed)
+```
+
+### Port allocation
+
+| Port | Service | Access |
+|------|---------|--------|
+| 8085 | Prod server | Public (Cloudflare tunnel) |
+| 8086 | Dev server | Localhost |
+| 8087 | Dashboard | Localhost only (127.0.0.1) |
 
 URL structure:
 ```
-games.josephbokan.io/                          → site/index.html (game picker)
-games.josephbokan.io/deadlock/                 → site/deadlock/index.html (patch listing)
-games.josephbokan.io/deadlock/03_21_2026.html  → specific patch notes page
+games.josephbokan.io/                                → site/index.html (game picker)
+games.josephbokan.io/deadlock/                       → site/deadlock/index.html (hub)
+games.josephbokan.io/deadlock/updates/               → site/deadlock/updates/index.html (patch listing)
+games.josephbokan.io/deadlock/updates/03-06-2026_update.html → specific patch notes
+games.josephbokan.io/deadlock/heroes.html            → hero browser
 ```
 
-Use macOS launchd plist files in ~/Library/LaunchAgents/ to auto-start server + watcher on boot.
+Cloudflare tunnel: `games.josephbokan.io` → `http://localhost:8085`
 
 ## API data
 
