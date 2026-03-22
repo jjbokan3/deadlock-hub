@@ -545,7 +545,7 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
         'CounterattackAntiMashDelay','SlashConeAngle','SlashRadius','SlashHalfWidth',
         'DampingFactor','LiftHeight','DamageThreshold','ParryWindow',
         'AbilityResourceCost','AbilityCharges','AbilityMaxCharges',
-        'ProjectileSpeed','ImpactDamage','BulletSpeed','TravelSpeed',
+        'ProjectileSpeed','BulletSpeed','TravelSpeed',
         'MaxJumpHeight','MinJumpHeight','LaunchAngle','VerticalLaunchSpeed',
       ]);
       let propBoxes='';
@@ -559,10 +559,11 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
         const postfix=v.postfix||'';
         // Check for spirit scaling
         const sf=v.scale_function;
-        const hasScale=sf&&(sf.specific_stat_scale_type==='ETechPower'||
-          (sf.scaling_stats&&sf.scaling_stats.includes('ETechPower')));
+        const hasScale=sf&&sf.specific_stat_scale_type==='ETechPower';
+        const scaleVal=hasScale&&sf.stat_scale?sf.stat_scale:null;
         propBoxes+=`<div class="ability-popup-prop">`;
-        if(hasScale)propBoxes+=`<span class="prop-scale">✦</span>`;
+        if(scaleVal)propBoxes+=`<span class="prop-scale">x${{scaleVal}}</span>`;
+        else if(hasScale)propBoxes+=`<span class="prop-scale">✦</span>`;
         propBoxes+=`<span class="prop-val">${{val}}<span class="prop-unit">${{postfix}}</span></span>`;
         propBoxes+=`<span class="prop-label">${{v.label}}</span></div>`;
       }}
