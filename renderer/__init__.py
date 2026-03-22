@@ -496,6 +496,7 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
 
   .sidebar-item {{ display:flex; align-items:center; gap:10px; padding:8px 16px; cursor:pointer; transition:all 0.15s; border-left:3px solid transparent; }}
   .sidebar-item:hover {{ background:var(--bg-card-hover); }}
+  .sidebar-item.kb-focus {{ background:var(--bg-card-hover); outline:1px solid var(--border-hover); outline-offset:-1px; }}
   .sidebar-item.active {{ background:var(--bg-card); border-left-color:var(--accent-orange); }}
   .si-portrait {{ width:32px; height:32px; border-radius:6px; background:var(--bg-card); border:1px solid var(--border); flex-shrink:0; display:flex; align-items:center; justify-content:center; overflow:hidden; }}
   .si-portrait img {{ width:100%; height:100%; object-fit:cover; }}
@@ -513,8 +514,11 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
   .detail-panel::-webkit-scrollbar-thumb {{ background:var(--border); border-radius:4px; }}
   .detail-panel::-webkit-scrollbar-thumb:hover {{ background:var(--border-hover); }}
 
-  .detail-section {{ padding:28px 32px; animation:fadeIn 0.2s ease; }}
-  @keyframes fadeIn {{ from {{ opacity:0; transform:translateY(8px); }} to {{ opacity:1; transform:translateY(0); }} }}
+  .detail-section {{ padding:28px 32px; }}
+  .detail-section.entering {{ animation:detailIn 0.25s ease both; }}
+  @keyframes detailIn {{ from {{ opacity:0; transform:translateY(12px); }} to {{ opacity:1; transform:translateY(0); }} }}
+  .detail-section.exiting {{ animation:detailOut 0.15s ease both; }}
+  @keyframes detailOut {{ from {{ opacity:1; transform:translateY(0); }} to {{ opacity:0; transform:translateY(-8px); }} }}
 
   .detail-header {{ display:flex; align-items:center; gap:20px; margin-bottom:24px; padding-bottom:20px; border-bottom:1px solid var(--border); }}
   .detail-portrait {{ width:72px; height:72px; border-radius:12px; background:var(--bg-card); border:1px solid var(--border); flex-shrink:0; display:flex; align-items:center; justify-content:center; overflow:hidden; }}
@@ -665,19 +669,50 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
     document.querySelector('.sidebar-overlay').classList.toggle('open');
   }}
 
-  /* ── Entity selection ── */
+  /* ── Entity selection with crossfade ── */
   let currentEntity = null;
-  function selectEntity(id) {{
-    // Deselect old
-    document.querySelectorAll('.sidebar-item.active').forEach(el => el.classList.remove('active'));
-    document.querySelectorAll('.detail-section').forEach(el => el.style.display = 'none');
-    document.getElementById('detail-empty').style.display = 'none';
+  function selectEntity(id, skipAnimation) {{
+    if (currentEntity === id) return;
 
-    // Select new
+    // Deselect sidebar
+    document.querySelectorAll('.sidebar-item.active').forEach(el => el.classList.remove('active'));
+    const emptyEl = document.getElementById('detail-empty');
+
+    // Animate out current detail
+    const oldDetail = currentEntity ? document.getElementById('detail-' + currentEntity) : emptyEl;
+    const newDetail = document.getElementById('detail-' + id);
+    if (!newDetail) return;
+
+    function showNew() {{
+      document.querySelectorAll('.detail-section').forEach(el => {{
+        el.style.display = 'none';
+        el.classList.remove('entering', 'exiting');
+      }});
+      if (emptyEl) emptyEl.style.display = 'none';
+      newDetail.style.display = '';
+      newDetail.classList.remove('exiting');
+      newDetail.classList.add('entering');
+      newDetail.addEventListener('animationend', function handler() {{
+        newDetail.classList.remove('entering');
+        newDetail.removeEventListener('animationend', handler);
+      }});
+    }}
+
+    if (oldDetail && oldDetail !== newDetail && !skipAnimation) {{
+      oldDetail.classList.add('exiting');
+      oldDetail.addEventListener('animationend', function handler() {{
+        oldDetail.classList.remove('exiting');
+        oldDetail.style.display = 'none';
+        oldDetail.removeEventListener('animationend', handler);
+        showNew();
+      }});
+    }} else {{
+      showNew();
+    }}
+
+    // Select sidebar item
     const item = document.querySelector(`.sidebar-item[data-entity-id="${{id}}"]`);
     if (item) item.classList.add('active');
-    const detail = document.getElementById('detail-' + id);
-    if (detail) detail.style.display = '';
     currentEntity = id;
 
     // Mobile: close sidebar
@@ -689,6 +724,9 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
 
     // Update URL hash
     history.replaceState(null, '', '#' + id);
+
+    // Update detail counts for active date filter
+    updateDetailCounts();
   }}
 
   /* ── Search filter ── */
@@ -696,46 +734,88 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
     const q = query.toLowerCase().trim();
     document.querySelectorAll('.sidebar-item').forEach(item => {{
       const name = item.dataset.entityName || '';
-      item.style.display = (!q || name.includes(q)) ? '' : 'none';
+      const dateHidden = item.classList.contains('date-hidden');
+      item.style.display = (!dateHidden && (!q || name.includes(q))) ? '' : 'none';
     }});
-    // Hide empty section headers
-    document.querySelectorAll('.sidebar-section').forEach(sec => {{
-      const items = sec.querySelectorAll('.sidebar-item');
-      const anyVisible = [...items].some(i => i.style.display !== 'none');
-      sec.style.display = anyVisible ? '' : 'none';
-    }});
+    updateSectionCounts();
   }}
 
   /* ── Date filter ── */
+  let activeDate = 'all';
   function filterByDate(date) {{
+    activeDate = date;
     const showAll = date === 'all';
     // Filter change items in ALL detail panels
     document.querySelectorAll('.change-item').forEach(el => {{
       const d = el.dataset.date;
       el.style.display = (showAll || !d || d === date) ? '' : 'none';
     }});
-    // Filter sidebar items by date
+    // Mark sidebar items by date
     document.querySelectorAll('.sidebar-item').forEach(item => {{
-      if (showAll) {{ item.classList.remove('date-hidden'); return; }}
-      const dates = (item.dataset.dates || '').split(',');
-      if (dates.includes(date)) {{
+      if (showAll) {{
         item.classList.remove('date-hidden');
       }} else {{
-        item.classList.add('date-hidden');
-        item.style.display = 'none';
+        const dates = (item.dataset.dates || '').split(',');
+        if (dates.includes(date)) {{
+          item.classList.remove('date-hidden');
+        }} else {{
+          item.classList.add('date-hidden');
+        }}
       }}
     }});
-    if (showAll) {{
-      // Re-apply search filter
-      const q = document.querySelector('.sidebar-search');
-      if (q) filterSidebar(q.value);
-    }}
-    // Hide empty sections
+    // Re-apply search filter (handles visibility + section counts)
+    const q = document.querySelector('.sidebar-search');
+    filterSidebar(q ? q.value : '');
+    // Update detail panel counts
+    updateDetailCounts();
+  }}
+
+  /* ── Update section counts in sidebar ── */
+  function updateSectionCounts() {{
     document.querySelectorAll('.sidebar-section').forEach(sec => {{
       const items = sec.querySelectorAll('.sidebar-item');
-      const anyVisible = [...items].some(i => i.style.display !== 'none');
+      const visible = [...items].filter(i => i.style.display !== 'none');
+      const anyVisible = visible.length > 0;
       sec.style.display = anyVisible ? '' : 'none';
+      const countEl = sec.querySelector('.ssh-count');
+      if (countEl) {{
+        const total = items.length;
+        countEl.textContent = anyVisible && visible.length < total
+          ? `${{visible.length}} / ${{total}}`
+          : `${{total}}`;
+      }}
     }});
+  }}
+
+  /* ── Update detail panel buff/nerf counts for active date ── */
+  function updateDetailCounts() {{
+    document.querySelectorAll('.detail-section').forEach(section => {{
+      const statsEl = section.querySelector('.detail-stats');
+      if (!statsEl) return;
+      const changes = section.querySelectorAll('.change-item');
+      let buffs = 0, nerfs = 0, neutral = 0;
+      changes.forEach(c => {{
+        if (c.style.display === 'none') return;
+        const dir = c.querySelector('.change-direction');
+        if (!dir) return;
+        if (dir.classList.contains('buff')) buffs++;
+        else if (dir.classList.contains('nerf')) nerfs++;
+        else neutral++;
+      }});
+      let html = `<span class="ds buff">▲ ${{buffs}} buff${{buffs !== 1 ? 's' : ''}}</span>`;
+      html += `<span class="ds nerf">▼ ${{nerfs}} nerf${{nerfs !== 1 ? 's' : ''}}</span>`;
+      if (neutral) html += `<span class="ds neutral">● ${{neutral}} other</span>`;
+      statsEl.innerHTML = html;
+    }});
+    // Also update system detail meta
+    const sysMeta = document.querySelector('#detail-system .detail-meta');
+    if (sysMeta) {{
+      const visible = document.querySelectorAll('#detail-system .change-item:not([style*="display: none"])').length;
+      const total = document.querySelectorAll('#detail-system .change-item').length;
+      sysMeta.textContent = activeDate === 'all'
+        ? `${{total}} changes`
+        : `${{visible}} / ${{total}} changes`;
+    }}
   }}
 
   /* ── Stars ── */
@@ -1010,14 +1090,96 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
     }}
   }})();
 
+  /* ── Keyboard navigation ── */
+  (function() {{
+    let kbIndex = -1;
+
+    function getVisibleItems() {{
+      return [...document.querySelectorAll('.sidebar-item')].filter(i => i.style.display !== 'none');
+    }}
+
+    function clearKbFocus() {{
+      document.querySelectorAll('.sidebar-item.kb-focus').forEach(el => el.classList.remove('kb-focus'));
+    }}
+
+    function setKbFocus(idx, items) {{
+      clearKbFocus();
+      if (idx < 0 || idx >= items.length) return;
+      kbIndex = idx;
+      const item = items[idx];
+      item.classList.add('kb-focus');
+      // Scroll into view within sidebar
+      item.scrollIntoView({{ block: 'nearest', behavior: 'smooth' }});
+    }}
+
+    document.addEventListener('keydown', function(e) {{
+      // Skip if typing in search
+      const isSearch = document.activeElement && document.activeElement.classList.contains('sidebar-search');
+
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {{
+        e.preventDefault();
+        const items = getVisibleItems();
+        if (!items.length) return;
+
+        // Find current index
+        if (kbIndex < 0) {{
+          // Start from active item if exists
+          const activeIdx = items.findIndex(i => i.classList.contains('active'));
+          kbIndex = activeIdx >= 0 ? activeIdx : -1;
+        }}
+
+        if (e.key === 'ArrowDown') {{
+          kbIndex = kbIndex < items.length - 1 ? kbIndex + 1 : 0;
+        }} else {{
+          kbIndex = kbIndex > 0 ? kbIndex - 1 : items.length - 1;
+        }}
+        setKbFocus(kbIndex, items);
+      }}
+
+      if (e.key === 'Enter' && !isSearch) {{
+        const items = getVisibleItems();
+        if (kbIndex >= 0 && kbIndex < items.length) {{
+          selectEntity(items[kbIndex].dataset.entityId);
+          clearKbFocus();
+        }}
+      }}
+
+      // Escape: close mobile sidebar or clear search
+      if (e.key === 'Escape') {{
+        const sidebar = document.querySelector('.sidebar');
+        if (sidebar.classList.contains('open')) {{
+          toggleSidebar();
+        }} else if (isSearch && document.activeElement.value) {{
+          document.activeElement.value = '';
+          filterSidebar('');
+        }}
+        clearKbFocus();
+        kbIndex = -1;
+      }}
+
+      // / to focus search
+      if (e.key === '/' && !isSearch) {{
+        e.preventDefault();
+        const search = document.querySelector('.sidebar-search');
+        if (search) search.focus();
+      }}
+    }});
+
+    // Reset kb index when mouse is used on sidebar
+    document.querySelector('.sidebar-list').addEventListener('mouseenter', function() {{
+      clearKbFocus();
+      kbIndex = -1;
+    }});
+  }})();
+
   /* ── Init: select from URL hash or first entity ── */
   (function() {{
     const hash = location.hash.slice(1);
     if (hash && document.getElementById('detail-' + hash)) {{
-      selectEntity(hash);
+      selectEntity(hash, true);
     }} else {{
       const first = document.querySelector('.sidebar-item');
-      if (first) selectEntity(first.dataset.entityId);
+      if (first) selectEntity(first.dataset.entityId, true);
     }}
   }})();
 </script>
