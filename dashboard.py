@@ -171,14 +171,22 @@ def _deploy() -> str:
     try:
         result = subprocess.run(
             ["bash", script],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True, text=True, timeout=300,
             cwd=PROJECT_DIR,
         )
         return result.stdout + result.stderr
     except subprocess.TimeoutExpired:
-        return "Deploy timed out after 2 minutes"
+        return "Deploy timed out after 5 minutes"
     except Exception as e:
         return f"Deploy error: {e}"
+
+
+def _regenerate() -> str:
+    """Clear seen cache and regenerate all patch pages."""
+    seen = os.path.join(CACHE_DIR, "seen_patches.json")
+    if os.path.exists(seen):
+        os.remove(seen)
+    return _manual_poll("heuristic")
 
 
 def _git_info() -> dict:
@@ -282,6 +290,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_json({"success": True, "message": _restart_service(name)})
         elif path == "/api/deploy":
             self._send_json({"success": True, "output": _deploy()})
+        elif path == "/api/regenerate":
+            self._send_json({"success": True, "output": _regenerate()})
         else:
             self._send_json({"error": "not found"}, 404)
 
@@ -375,6 +385,7 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
       <div id="git-info">Loading...</div>
       <div class="btn-row">
         <button class="btn green" onclick="deploy()">Pull &amp; Restart</button>
+        <button class="btn" onclick="regenerate()">Regenerate Pages</button>
       </div>
     </div>
 
@@ -522,11 +533,25 @@ async function manualPoll(llm) {
 async function deploy() {
   const out = document.getElementById('poll-output');
   out.style.display = 'block';
-  out.textContent = 'Deploying...';
+  out.textContent = 'Deploying (pull + regenerate + restart)...';
   try {
     const data = await fetchJson('/api/deploy', {method:'POST'});
     out.textContent = data.output || '(no output)';
     toast('Deploy complete');
+    refreshStatus();
+  } catch(e) {
+    out.textContent = 'Error: ' + e.message;
+  }
+}
+
+async function regenerate() {
+  const out = document.getElementById('poll-output');
+  out.style.display = 'block';
+  out.textContent = 'Regenerating all patch pages...';
+  try {
+    const data = await fetchJson('/api/regenerate', {method:'POST'});
+    out.textContent = data.output || '(no output)';
+    toast('Regeneration complete');
     refreshStatus();
   } catch(e) {
     out.textContent = 'Error: ' + e.message;

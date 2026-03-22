@@ -40,6 +40,14 @@ elif command -v uv &>/dev/null; then
     uv pip install -r requirements.txt --quiet 2>/dev/null
 fi
 
+echo "Regenerating patch pages with updated renderer..."
+rm -f .cache/seen_patches.json
+if [ -f ".venv/bin/python3" ]; then
+    .venv/bin/python3 watcher.py --once --llm heuristic --output-dir ./site/deadlock/updates 2>&1 || true
+elif command -v uv &>/dev/null; then
+    uv run python3 watcher.py --once --llm heuristic --output-dir ./site/deadlock/updates 2>&1 || true
+fi
+
 echo "Restarting services..."
 launchctl kickstart -k "gui/$UID_NUM/io.josephbokan.deadlock-server" 2>/dev/null || true
 launchctl kickstart -k "gui/$UID_NUM/io.josephbokan.deadlock-watcher" 2>/dev/null || true
