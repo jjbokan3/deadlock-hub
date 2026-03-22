@@ -127,8 +127,7 @@ def _render_sidebar_item(entity_id: str, name: str, rating: LLMRating | None,
     return (
         f'<div class="sidebar-item" data-entity-id="{entity_id}" '
         f'data-entity-type="{entity_type}" data-entity-name="{_e(name.lower())}" '
-        f'data-category="{category}" data-dates="{dates}" '
-        f'onclick="selectEntity(\'{entity_id}\')">'
+        f'data-category="{category}" data-dates="{dates}">'
         f'<div class="si-portrait" data-name="{_e(name)}"></div>'
         f'<div class="si-info">'
         f'<div class="si-name">{_e(name)}</div>'
@@ -151,7 +150,7 @@ def _render_sidebar(data: ParsedPatchNotes) -> str:
         sys_item = (
             f'<div class="sidebar-item sidebar-item-system" data-entity-id="system" '
             f'data-entity-type="system" data-entity-name="system changes" '
-            f'data-dates="{sys_dates}" onclick="selectEntity(\'system\')">'
+            f'data-dates="{sys_dates}">'
             f'<div class="si-portrait si-portrait-system">⚙</div>'
             f'<div class="si-info">'
             f'<div class="si-name">System Changes</div>'
@@ -515,10 +514,8 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
   .detail-panel::-webkit-scrollbar-thumb:hover {{ background:var(--border-hover); }}
 
   .detail-section {{ padding:28px 32px; }}
-  .detail-section.entering {{ animation:detailIn 0.25s ease both; }}
-  @keyframes detailIn {{ from {{ opacity:0; transform:translateY(12px); }} to {{ opacity:1; transform:translateY(0); }} }}
-  .detail-section.exiting {{ animation:detailOut 0.15s ease both; }}
-  @keyframes detailOut {{ from {{ opacity:1; transform:translateY(0); }} to {{ opacity:0; transform:translateY(-8px); }} }}
+  .detail-section.entering {{ animation:detailIn 0.2s ease both; }}
+  @keyframes detailIn {{ from {{ opacity:0; transform:translateY(10px); }} to {{ opacity:1; transform:translateY(0); }} }}
 
   .detail-header {{ display:flex; align-items:center; gap:20px; margin-bottom:24px; padding-bottom:20px; border-bottom:1px solid var(--border); }}
   .detail-portrait {{ width:72px; height:72px; border-radius:12px; background:var(--bg-card); border:1px solid var(--border); flex-shrink:0; display:flex; align-items:center; justify-content:center; overflow:hidden; }}
@@ -620,7 +617,7 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
     .app-layout {{ flex-direction:column; height:calc(100vh - 56px); }}
     .sidebar {{ position:fixed; left:0; top:56px; bottom:0; width:85vw; max-width:360px; z-index:50; transform:translateX(-100%); transition:transform 0.3s ease; box-shadow:4px 0 24px rgba(0,0,0,0.5); }}
     .sidebar.open {{ transform:translateX(0); }}
-    .sidebar-overlay {{ display:none; position:fixed; inset:0; top:56px; background:rgba(0,0,0,0.5); z-index:49; }}
+    .sidebar-overlay {{ display:none; position:fixed; top:56px; bottom:0; right:0; left:min(85vw, 360px); background:rgba(0,0,0,0.5); z-index:51; }}
     .sidebar-overlay.open {{ display:block; }}
     .detail-panel {{ width:100%; }}
     .detail-section {{ padding:20px 16px; }}
@@ -652,7 +649,7 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
   </div>
 </div>
 
-<div class="sidebar-overlay" onclick="toggleSidebar()"></div>
+<div class="sidebar-overlay" id="sidebarOverlay"></div>
 
 <div class="app-layout">
   {sidebar}
@@ -668,46 +665,50 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
     document.querySelector('.sidebar').classList.toggle('open');
     document.querySelector('.sidebar-overlay').classList.toggle('open');
   }}
+  function closeSidebar() {{
+    document.querySelector('.sidebar').classList.remove('open');
+    document.querySelector('.sidebar-overlay').classList.remove('open');
+  }}
 
-  /* ── Entity selection with crossfade ── */
+  /* ── Sidebar item clicks + overlay close ── */
+  (function() {{
+    // Clicks on sidebar items: select entity
+    document.querySelector('.sidebar').addEventListener('click', function(e) {{
+      const item = e.target.closest('.sidebar-item');
+      if (item) selectEntity(item.dataset.entityId);
+    }});
+    // Overlay sits to the RIGHT of sidebar — no overlap, so clicking it closes
+    document.getElementById('sidebarOverlay').addEventListener('click', function() {{
+      closeSidebar();
+    }});
+  }})();
+
+  /* ── Entity selection with enter animation ── */
   let currentEntity = null;
   function selectEntity(id, skipAnimation) {{
     if (currentEntity === id) return;
 
     // Deselect sidebar
     document.querySelectorAll('.sidebar-item.active').forEach(el => el.classList.remove('active'));
-    const emptyEl = document.getElementById('detail-empty');
 
-    // Animate out current detail
-    const oldDetail = currentEntity ? document.getElementById('detail-' + currentEntity) : emptyEl;
+    // Hide all detail sections
+    document.querySelectorAll('.detail-section').forEach(el => {{
+      el.style.display = 'none';
+      el.classList.remove('entering');
+    }});
+    const emptyEl = document.getElementById('detail-empty');
+    if (emptyEl) emptyEl.style.display = 'none';
+
+    // Show new detail with enter animation
     const newDetail = document.getElementById('detail-' + id);
     if (!newDetail) return;
-
-    function showNew() {{
-      document.querySelectorAll('.detail-section').forEach(el => {{
-        el.style.display = 'none';
-        el.classList.remove('entering', 'exiting');
-      }});
-      if (emptyEl) emptyEl.style.display = 'none';
-      newDetail.style.display = '';
-      newDetail.classList.remove('exiting');
+    newDetail.style.display = '';
+    if (!skipAnimation) {{
       newDetail.classList.add('entering');
       newDetail.addEventListener('animationend', function handler() {{
         newDetail.classList.remove('entering');
         newDetail.removeEventListener('animationend', handler);
       }});
-    }}
-
-    if (oldDetail && oldDetail !== newDetail && !skipAnimation) {{
-      oldDetail.classList.add('exiting');
-      oldDetail.addEventListener('animationend', function handler() {{
-        oldDetail.classList.remove('exiting');
-        oldDetail.style.display = 'none';
-        oldDetail.removeEventListener('animationend', handler);
-        showNew();
-      }});
-    }} else {{
-      showNew();
     }}
 
     // Select sidebar item
@@ -716,8 +717,7 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
     currentEntity = id;
 
     // Mobile: close sidebar
-    document.querySelector('.sidebar').classList.remove('open');
-    document.querySelector('.sidebar-overlay').classList.remove('open');
+    closeSidebar();
 
     // Scroll detail to top
     document.querySelector('.detail-panel').scrollTop = 0;
