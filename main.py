@@ -126,7 +126,7 @@ def _load_env_file():
             key, _, value = line.partition("=")
             key = key.strip()
             value = value.strip().strip("'\"")
-            if key and value and key not in os.environ:
+            if key and value and not os.environ.get(key):
                 os.environ[key] = value
     logger.info("Loaded .env file")
 
