@@ -116,7 +116,8 @@ def _render_system_section(changes: list[Change]) -> str:
 def _render_item_card(group: ItemChangeGroup) -> str:
     rating = group.rating or LLMRating.from_score(3, "")
     badge = _render_rating_badge(rating, small=True)
-    changes_html = "\n".join(_render_change(c, show_ability=False) for c in group.changes)
+    sorted_changes = _sort_changes(group.changes)
+    changes_html = "\n".join(_render_change(c, show_ability=False) for c in sorted_changes)
     explanation = ""
     if rating.explanation:
         explanation = (
@@ -182,10 +183,23 @@ def _render_item_groups(item_changes: dict[str, ItemChangeGroup]) -> str:
   </div>'''
 
 
+def _sort_changes(changes: list[Change]) -> list[Change]:
+    """Sort changes: base stats first, then by ability slot (1-4), then tier."""
+    def sort_key(c: Change):
+        # Base stat changes (no ability) come first
+        has_ability = 0 if c.ability_slot is None and not c.ability_name else 1
+        slot = c.ability_slot or 0
+        tier = c.tier or 0
+        # Within same ability+tier, preserve original order via index
+        return (has_ability, slot, c.ability_name or "", tier)
+    return sorted(changes, key=sort_key)
+
+
 def _render_hero_card(group: HeroChangeGroup) -> str:
     rating = group.rating or LLMRating.from_score(3, "")
     badge = _render_rating_badge(rating)
-    changes_html = "\n".join(_render_change(c, hero_name=group.hero.name) for c in group.changes)
+    sorted_changes = _sort_changes(group.changes)
+    changes_html = "\n".join(_render_change(c, hero_name=group.hero.name) for c in sorted_changes)
     explanation = ""
     if rating.explanation:
         explanation = (
@@ -317,7 +331,7 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
   .change-item {{ display:flex; align-items:flex-start; gap:10px; padding:8px 12px; border-radius:6px; font-size:14px; line-height:1.5; }}
   .change-item .ability-tag {{ font-family:'JetBrains Mono',monospace; font-size:11px; font-weight:500; padding:2px 8px; border-radius:4px; white-space:nowrap; flex-shrink:0; margin-top:2px; letter-spacing:0.5px; text-decoration:none; }}
   a.ability-tag:hover {{ filter:brightness(1.3); }}
-  .ability-popup {{ position:fixed; z-index:9999; width:380px; border:1px solid #583D6F; border-radius:12px; overflow:hidden; box-shadow:0 8px 32px rgba(0,0,0,0.7); pointer-events:none; opacity:0; transition:opacity 0.2s; background:#121013; font-family:'Chakra Petch',sans-serif; color:#FFEFD7; }}
+  .ability-popup {{ position:fixed; z-index:9999; width:min(380px, calc(100vw - 32px)); border:1px solid #583D6F; border-radius:12px; overflow:hidden; box-shadow:0 8px 32px rgba(0,0,0,0.7); pointer-events:none; opacity:0; transition:opacity 0.2s; background:#121013; font-family:'Chakra Petch',sans-serif; color:#FFEFD7; }}
   .ability-popup.visible {{ opacity:1; pointer-events:auto; }}
   .ability-popup-header {{ display:flex; align-items:center; gap:12px; padding:16px 18px 12px; background:linear-gradient(135deg,#1a1520,#25193a); }}
   .ability-popup-icon {{ width:42px; height:42px; border-radius:6px; object-fit:contain; }}
@@ -379,11 +393,13 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
     .rating-badge {{ font-size:11px; padding:5px 10px; }}
     .change-item {{ font-size:13px; }} .hero-img {{ width:36px; height:36px; }}
     .item-img {{ width:24px; height:24px; }}
+    .github-link span {{ display:none; }} .github-link {{ padding:8px; }}
+    .ability-popup-prop {{ min-width:70px; padding:6px 8px 4px; }}
   }}
 </style>
 </head>
 <body>
-<a href="https://github.com/jjbokan3/deadlock-hub" target="_blank" rel="noopener" class="github-link"><svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a>
+<a href="https://github.com/jjbokan3/deadlock-hub" target="_blank" rel="noopener" class="github-link"><svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><span>GitHub</span></a>
 <div class="container">
   <header>
     <div class="tag">Patch Notes</div>
@@ -628,27 +644,48 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
       currentKey='';
     }}
 
-    document.addEventListener('mouseover',function(e){{
-      const tag=e.target.closest('a.ability-tag[data-hero-name]');
-      if(!tag)return;
-      clearTimeout(hoverTimer);
-      hoverTimer=setTimeout(()=>show(tag),800);
-    }});
+    const isTouch='ontouchstart' in window;
 
-    document.addEventListener('mouseout',function(e){{
-      const tag=e.target.closest('a.ability-tag[data-hero-name]');
-      if(!tag)return;
-      const related=e.relatedTarget;
-      if(related&&(popup.contains(related)||popup===related))return;
-      hide();
-    }});
+    if(isTouch){{
+      // Tap to toggle popup, tap elsewhere to close
+      document.addEventListener('click',function(e){{
+        const tag=e.target.closest('a.ability-tag[data-hero-name]');
+        if(tag){{
+          e.preventDefault();
+          e.stopPropagation();
+          if(currentKey===tag.dataset.heroName.toLowerCase()+'_'+tag.dataset.abilitySlot&&popup.classList.contains('visible')){{
+            hide();
+          }}else{{
+            show(tag);
+          }}
+          return;
+        }}
+        if(!popup.contains(e.target))hide();
+      }});
+    }}else{{
+      // Desktop: hover with delay
+      document.addEventListener('mouseover',function(e){{
+        const tag=e.target.closest('a.ability-tag[data-hero-name]');
+        if(!tag)return;
+        clearTimeout(hoverTimer);
+        hoverTimer=setTimeout(()=>show(tag),800);
+      }});
 
-    popup.addEventListener('mouseenter',function(){{
-      clearTimeout(hoverTimer);
-    }});
-    popup.addEventListener('mouseleave',function(){{
-      hide();
-    }});
+      document.addEventListener('mouseout',function(e){{
+        const tag=e.target.closest('a.ability-tag[data-hero-name]');
+        if(!tag)return;
+        const related=e.relatedTarget;
+        if(related&&(popup.contains(related)||popup===related))return;
+        hide();
+      }});
+
+      popup.addEventListener('mouseenter',function(){{
+        clearTimeout(hoverTimer);
+      }});
+      popup.addEventListener('mouseleave',function(){{
+        hide();
+      }});
+    }}
   }})();
 </script>
 </body>

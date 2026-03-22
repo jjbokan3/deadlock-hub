@@ -140,6 +140,15 @@ def _parse_rating_response(raw: str) -> tuple[LLMRating, dict[int, str]]:
     try:
         data = json.loads(cleaned)
     except json.JSONDecodeError:
+        # Try to recover truncated JSON by extracting rating and partial explanation
+        import re
+        rating_match = re.search(r'"rating"\s*:\s*(\d)', cleaned)
+        expl_match = re.search(r'"explanation"\s*:\s*"([^"]*)', cleaned)
+        if rating_match:
+            rating = int(rating_match.group(1))
+            expl = expl_match.group(1) if expl_match else "Response truncated."
+            logger.warning(f"Recovered truncated response: rating={rating}")
+            return LLMRating.from_score(rating, expl), {}
         logger.warning(f"Failed to parse LLM response as JSON: {raw[:200]}")
         return LLMRating.from_score(3, "Unable to parse LLM response."), {}
 

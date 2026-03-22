@@ -16,7 +16,7 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_DIR = "./site/deadlock"
+DEFAULT_DIR = "./site/deadlock/updates"
 
 
 def _parse_patch_info(filename: str, patches_dir: str) -> dict:
@@ -29,7 +29,8 @@ def _parse_patch_info(filename: str, patches_dir: str) -> dict:
     sort_key = "0"
     date_obj = None
 
-    match = re.search(r'(\d{2})_(\d{2})_(\d{4})', stem)
+    # Match MM-DD-YYYY or MM_DD_YYYY (patch title format)
+    match = re.search(r'(\d{2})[-_](\d{2})[-_](\d{4})', stem)
     if match:
         m, d, y = match.groups()
         sort_key = f"{y}{m}{d}"
@@ -39,7 +40,8 @@ def _parse_patch_info(filename: str, patches_dir: str) -> dict:
             pass
 
     if not date_obj:
-        match = re.match(r'(\d{4})-(\d{2})-(\d{2})', stem)
+        # Match YYYY-MM-DD or YYYY_MM_DD (ISO format)
+        match = re.match(r'(\d{4})[-_](\d{2})[-_](\d{2})', stem)
         if match:
             y, m, d = match.groups()
             sort_key = f"{y}{m}{d}"
@@ -211,7 +213,7 @@ INDEX_TEMPLATE = '''<!DOCTYPE html>
 </head>
 <body>
 <div class="container">
-  <a href="/" class="back">← all games</a>
+  <a href="/deadlock/" class="back">← deadlock hub</a>
   <header>
     <div class="logo">games.josephbokan.io/deadlock</div>
     <h1>Deadlock</h1>

@@ -216,8 +216,8 @@ def main():
         if not args.output and not args.json_only:
             import re as _re
             safe = _re.sub(r'[^\w\-]', '_', patch_title.lower()).strip('_')
-            os.makedirs("./site/deadlock", exist_ok=True)
-            args.output = f"./site/deadlock/{safe}.html"
+            os.makedirs("./site/deadlock/updates", exist_ok=True)
+            args.output = f"./site/deadlock/updates/{safe}.html"
             logger.info(f"Auto output: {args.output}")
     elif args.input:
         with open(args.input, encoding="utf-8") as f:

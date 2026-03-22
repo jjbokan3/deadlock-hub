@@ -24,7 +24,7 @@ class ClaudeProvider(LLMProvider):
     def complete(self, prompt: str, system: str = "") -> str:
         message = self.client.messages.create(
             model=self.model,
-            max_tokens=1024,
+            max_tokens=2048,
             system=system or "You are a helpful assistant.",
             messages=[{"role": "user", "content": prompt}],
         )

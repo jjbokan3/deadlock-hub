@@ -100,18 +100,37 @@ def main():
     site_dir = os.path.abspath(args.dir)
     ensure_site_root(site_dir)
 
-    # Ensure deadlock subdirectory exists
+    # Ensure deadlock subdirectory structure exists
     dl_dir = os.path.join(site_dir, "deadlock")
-    os.makedirs(dl_dir, exist_ok=True)
+    updates_dir = os.path.join(dl_dir, "updates")
+    os.makedirs(updates_dir, exist_ok=True)
 
-    # Generate deadlock index if needed
+    # Generate deadlock hub page if needed
     dl_index = os.path.join(dl_dir, "index.html")
     if not os.path.exists(dl_index):
         try:
-            from index_generator import write_index
-            write_index(dl_dir)
+            from hub_generator import write_hub_page
+            write_hub_page(dl_dir)
         except Exception as e:
-            logger.warning(f"Could not generate deadlock index: {e}")
+            logger.warning(f"Could not generate deadlock hub: {e}")
+
+    # Generate updates index if needed
+    updates_index = os.path.join(updates_dir, "index.html")
+    if not os.path.exists(updates_index):
+        try:
+            from index_generator import write_index
+            write_index(updates_dir)
+        except Exception as e:
+            logger.warning(f"Could not generate updates index: {e}")
+
+    # Generate heroes page if needed
+    heroes_page = os.path.join(dl_dir, "heroes.html")
+    if not os.path.exists(heroes_page):
+        try:
+            from hero_browser import write_heroes_page
+            write_heroes_page(dl_dir)
+        except Exception as e:
+            logger.warning(f"Could not generate heroes page: {e}")
 
     handler = partial(SiteHandler, directory=site_dir)
     server = HTTPServer((args.host, args.port), handler)

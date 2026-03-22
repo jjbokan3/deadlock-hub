@@ -16,14 +16,24 @@ logger = logging.getLogger(__name__)
 # Hero name aliases: display text in patch notes → API name
 HERO_ALIASES = {
     "doorman": "the doorman",
-    # Add any future aliases here
+    "vindcita": "vindicta",
+    # Add any future aliases/typos here
+}
+
+# Item name aliases: display text in patch notes → API name
+ITEM_ALIASES = {
+    "golden egg goose": "golden goose egg",
+    # Add any future aliases/typos here
 }
 
 
 def _normalize_name(name: str) -> str:
-    """Normalize a name for matching (lowercase, strip whitespace)."""
+    """Normalize a name for matching (lowercase, strip whitespace).
+
+    Checks hero aliases first, then item aliases.
+    """
     n = name.strip().lower()
-    return HERO_ALIASES.get(n, n)
+    return HERO_ALIASES.get(n, ITEM_ALIASES.get(n, n))
 
 
 def _split_entity_line(line: str) -> tuple[Optional[str], str]:
@@ -104,10 +114,17 @@ def parse(raw_text: str, api: DeadlockAPI) -> ParsedPatchNotes:
                 _process_item_change(result, api, entity_name, normalized, change_text, raw_line, in_street_brawl)
                 continue
 
-            # Could be an item not in our known set, or a system change with a colon
-            # Try fuzzy matching on items
+            # Try fuzzy matching on heroes (catches typos like "Vindcita" → "Vindicta")
+            fuzzy_hero = _fuzzy_match_hero(api, entity_name)
+            if fuzzy_hero:
+                logger.debug(f"Fuzzy hero match: '{entity_name}' → '{fuzzy_hero}'")
+                _process_hero_change(result, api, entity_name, fuzzy_hero, change_text, raw_line, in_street_brawl)
+                continue
+
+            # Try fuzzy matching on items (catches typos/word-order variants)
             item = _fuzzy_match_item(api, entity_name)
             if item:
+                logger.debug(f"Fuzzy item match: '{entity_name}' → '{item.name}'")
                 _process_item_change(result, api, item.name, item.name.lower(), change_text, raw_line, in_street_brawl)
                 continue
 
@@ -235,11 +252,44 @@ def _fuzzy_match_item(api: DeadlockAPI, name: str):
     """Try to match an item name with minor variations."""
     normalized = name.strip().lower()
 
-    # Direct match already failed, try common variations
-    # e.g., "Golden Goose Egg" might be stored differently
+    # Check item aliases first
+    aliased = ITEM_ALIASES.get(normalized)
+    if aliased and aliased in api.items_by_name:
+        return api.items_by_name[aliased]
+
     for item_name, item_data in api.items_by_name.items():
         # Check if the patch note name is a substring or vice versa
         if normalized in item_name or item_name in normalized:
             return item_data
+
+        # Word overlap: if all words from one name appear in the other
+        # Catches typos like "Golden Egg Goose" → "Golden Goose Egg"
+        norm_words = set(normalized.split())
+        item_words = set(item_name.split())
+        if len(norm_words) >= 2 and norm_words == item_words:
+            return item_data
+
+    return None
+
+
+def _fuzzy_match_hero(api: DeadlockAPI, name: str):
+    """Try to match a hero name with minor variations (typos, aliases)."""
+    normalized = name.strip().lower()
+
+    # Check hero aliases
+    aliased = HERO_ALIASES.get(normalized)
+    if aliased and aliased in api.hero_names:
+        return aliased
+
+    # Try edit distance for short names (catch single-char typos like Vindcita)
+    if len(normalized) >= 4:
+        for hero_name in api.hero_names:
+            if abs(len(normalized) - len(hero_name)) <= 2:
+                # Simple: check if sorting the chars gives same result (anagram-ish)
+                # or if only 1-2 chars differ
+                diffs = sum(1 for a, b in zip(normalized, hero_name) if a != b)
+                diffs += abs(len(normalized) - len(hero_name))
+                if diffs <= 2:
+                    return hero_name
 
     return None

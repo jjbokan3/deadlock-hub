@@ -57,7 +57,7 @@ logger = logging.getLogger("watcher")
 
 CHANGELOG_RSS = "https://forums.playdeadlock.com/forums/changelog.10/index.rss"
 SEEN_FILE = ".cache/seen_patches.json"
-DEFAULT_OUTPUT_DIR = "./site/deadlock"
+DEFAULT_OUTPUT_DIR = "./site/deadlock/updates"
 
 
 def fetch_rss(url: str = CHANGELOG_RSS) -> list[dict]:
@@ -111,10 +111,8 @@ def run_pipeline(patch_text: str, title: str, output_dir: str, llm: str, extra_a
     """Run main.py on the extracted patch text."""
     os.makedirs(output_dir, exist_ok=True)
 
-    # Create a safe filename from the title
-    safe_name = re.sub(r'[^\w\-]', '_', title.lower()).strip('_')
-    date_prefix = datetime.now().strftime("%Y-%m-%d")
-    filename = f"{date_prefix}_{safe_name}"
+    # Create a safe filename from the title (title already contains the date)
+    filename = re.sub(r'[^\w\-]', '_', title.lower()).strip('_')
 
     txt_path = os.path.join(output_dir, f"{filename}.txt")
     html_path = os.path.join(output_dir, f"{filename}.html")
@@ -139,8 +137,12 @@ def run_pipeline(patch_text: str, title: str, output_dir: str, llm: str, extra_a
 
     if result.returncode == 0:
         logger.info(f"Generated: {html_path}")
+        if result.stderr:
+            # Show pipeline output (progress info, warnings, etc.)
+            for line in result.stderr.strip().splitlines():
+                logger.info(f"  | {line}")
     else:
-        logger.error(f"Pipeline failed:\n{result.stderr}")
+        logger.error(f"Pipeline failed (exit code {result.returncode}):\n{result.stderr}")
 
     return html_path if result.returncode == 0 else None
 
