@@ -1,0 +1,25 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Secrets
+.env
+
+# API cache
+.cache/
+
+# macOS
+.DS_Store
+
+# Generated site output
+site/deadlock/*.html
+
+# UV
+.python-version
