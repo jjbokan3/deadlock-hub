@@ -70,6 +70,7 @@ class Change:
     new_value: Optional[str] = None
     raw_line: str = ""
     street_brawl: bool = False
+    date: Optional[str] = None  # e.g. "03-07-2026" — the date this change was posted
 
 
 @dataclass

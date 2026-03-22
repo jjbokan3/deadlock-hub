@@ -70,6 +70,7 @@ def parse(raw_text: str, api: DeadlockAPI) -> ParsedPatchNotes:
     result = ParsedPatchNotes()
     lines = raw_text.strip().splitlines()
     in_street_brawl = False
+    current_date = None  # tracks which date's changes we're processing
 
     for raw_line in lines:
         line = raw_line.strip()
@@ -78,11 +79,15 @@ def parse(raw_text: str, api: DeadlockAPI) -> ParsedPatchNotes:
         if not line:
             continue
 
-        # Detect section markers like [ Street Brawl ]
+        # Detect section markers like [ Street Brawl ], [ General ], [ 03-07-2026 Patch: ]
         section_match = re.match(r'^\[?\s*\[([^\]]+)\]\s*\]?$', line)
         if section_match:
-            section_name = section_match.group(1).strip().lower()
-            in_street_brawl = "street brawl" in section_name
+            section_name = section_match.group(1).strip()
+            # Check for date header: "03-07-2026 Patch:" or "03-07-2026 Update:"
+            date_match = re.match(r'(\d{2}-\d{2}-\d{4})\s+(?:Patch|Hotfix|Update)', section_name)
+            if date_match:
+                current_date = date_match.group(1)
+            in_street_brawl = "street brawl" in section_name.lower()
             continue
 
         if line.startswith("-"):
@@ -101,31 +106,31 @@ def parse(raw_text: str, api: DeadlockAPI) -> ParsedPatchNotes:
             if brawl_match:
                 brawl_hero = _normalize_name(brawl_match.group(1))
                 if brawl_hero in api.hero_names:
-                    _process_hero_change(result, api, brawl_match.group(1).strip(), brawl_hero, change_text, raw_line, street_brawl=True)
+                    _process_hero_change(result, api, brawl_match.group(1).strip(), brawl_hero, change_text, raw_line, street_brawl=True, date=current_date)
                     continue
 
             # Check if it's a hero
             if normalized in api.hero_names:
-                _process_hero_change(result, api, entity_name, normalized, change_text, raw_line, in_street_brawl)
+                _process_hero_change(result, api, entity_name, normalized, change_text, raw_line, in_street_brawl, date=current_date)
                 continue
 
             # Check if it's an item (by display name)
             if normalized in api.item_names:
-                _process_item_change(result, api, entity_name, normalized, change_text, raw_line, in_street_brawl)
+                _process_item_change(result, api, entity_name, normalized, change_text, raw_line, in_street_brawl, date=current_date)
                 continue
 
             # Try fuzzy matching on heroes (catches typos like "Vindcita" → "Vindicta")
             fuzzy_hero = _fuzzy_match_hero(api, entity_name)
             if fuzzy_hero:
                 logger.debug(f"Fuzzy hero match: '{entity_name}' → '{fuzzy_hero}'")
-                _process_hero_change(result, api, entity_name, fuzzy_hero, change_text, raw_line, in_street_brawl)
+                _process_hero_change(result, api, entity_name, fuzzy_hero, change_text, raw_line, in_street_brawl, date=current_date)
                 continue
 
             # Try fuzzy matching on items (catches typos/word-order variants)
             item = _fuzzy_match_item(api, entity_name)
             if item:
                 logger.debug(f"Fuzzy item match: '{entity_name}' → '{item.name}'")
-                _process_item_change(result, api, item.name, item.name.lower(), change_text, raw_line, in_street_brawl)
+                _process_item_change(result, api, item.name, item.name.lower(), change_text, raw_line, in_street_brawl, date=current_date)
                 continue
 
         # System change (no matching entity)
@@ -139,6 +144,7 @@ def parse(raw_text: str, api: DeadlockAPI) -> ParsedPatchNotes:
             new_value=new_val,
             raw_line=raw_line,
             street_brawl=in_street_brawl,
+            date=current_date,
         ))
 
     # Log summary
@@ -159,6 +165,7 @@ def _process_hero_change(
     change_text: str,
     raw_line: str,
     street_brawl: bool = False,
+    date: str | None = None,
 ):
     """Process a single hero change line."""
     hero_data = api.get_hero(normalized) or api.get_hero(display_name)
@@ -210,6 +217,7 @@ def _process_hero_change(
         new_value=new_val,
         raw_line=raw_line,
         street_brawl=street_brawl,
+        date=date,
     ))
 
 
@@ -221,6 +229,7 @@ def _process_item_change(
     change_text: str,
     raw_line: str,
     street_brawl: bool = False,
+    date: str | None = None,
 ):
     """Process a single item change line."""
     item_data = api.get_item(normalized) or api.get_item(display_name)
@@ -245,6 +254,7 @@ def _process_item_change(
         new_value=new_val,
         raw_line=raw_line,
         street_brawl=street_brawl,
+        date=date,
     ))
 
 

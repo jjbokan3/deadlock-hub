@@ -73,8 +73,9 @@ def _render_change(c: Change, show_ability: bool = True, hero_name: str = "") ->
         tag_html = f'<span class="ability-tag {tag_cls}">{tag_text}</span>'
 
     sb_tag = '<span class="street-brawl-tag">Street Brawl</span>' if c.street_brawl else ''
+    date_attr = f' data-date="{_e(c.date)}"' if c.date else ''
     return (
-        f'<div class="change-item {bg_cls}">'
+        f'<div class="change-item {bg_cls}"{date_attr}>'
         f'<span class="change-direction {cls}">{sym}</span>'
         f'{tag_html}'
         f'{_e(c.text)}'
@@ -237,6 +238,44 @@ def _render_hero_section(hero_changes: dict[str, HeroChangeGroup]) -> str:
 
 # ── Full page ────────────────────────────────────────────────────
 
+def _collect_dates(data: ParsedPatchNotes) -> list[str]:
+    """Collect all unique dates from changes, sorted chronologically."""
+    dates = set()
+    for c in data.system_changes:
+        if c.date:
+            dates.add(c.date)
+    for g in data.item_changes.values():
+        for c in g.changes:
+            if c.date:
+                dates.add(c.date)
+    for g in data.hero_changes.values():
+        for c in g.changes:
+            if c.date:
+                dates.add(c.date)
+    # Sort chronologically (MM-DD-YYYY → YYYYMMDD for sorting)
+    def date_sort_key(d: str) -> str:
+        parts = d.split("-")
+        if len(parts) == 3:
+            return f"{parts[2]}{parts[0]}{parts[1]}"
+        return d
+    return sorted(dates, key=date_sort_key)
+
+
+def _render_date_filter(dates: list[str]) -> str:
+    """Render a date filter dropdown if there are multiple dates."""
+    if len(dates) <= 1:
+        return ""
+    options = ''.join(f'<option value="{d}">{d}</option>' for d in dates)
+    return f'''
+    <div class="date-filter">
+      <label for="dateFilter">Filter by date:</label>
+      <select id="dateFilter" onchange="filterByDate(this.value)">
+        <option value="all">All Dates ({len(dates)})</option>
+        {options}
+      </select>
+    </div>'''
+
+
 def render(data: ParsedPatchNotes) -> str:
     """Render complete HTML page from parsed + rated patch notes."""
     system_html = _render_system_section(data.system_changes)
@@ -245,9 +284,13 @@ def render(data: ParsedPatchNotes) -> str:
     title = _e(data.title) if data.title else "Deadlock Patch Notes"
     summary_html = f'<p class="patch-summary">{_e(data.summary)}</p>' if data.summary else ''
 
+    dates = _collect_dates(data)
+    date_filter_html = _render_date_filter(dates)
+
     return PAGE_TEMPLATE.format(
         page_title=title,
         patch_summary=summary_html,
+        date_filter=date_filter_html,
         system_section=system_html,
         items_section=items_html,
         heroes_section=heroes_html,
@@ -375,9 +418,14 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
   .stars {{ display:flex; gap:3px; }} .star {{ width:14px; height:14px; display:inline-block; }} .star svg {{ width:100%; height:100%; }}
   .rating-explanation {{ padding:16px 18px; background:#ffffff06; border-left:3px solid var(--accent-orange); border-radius:0 8px 8px 0; font-size:14px; color:var(--text-secondary); line-height:1.65; }}
   .rating-explanation strong {{ color:var(--text-primary); font-weight:600; }}
-  .controls {{ display:flex; justify-content:flex-end; margin-bottom:16px; }}
+  .controls {{ display:flex; justify-content:flex-end; align-items:center; gap:12px; margin-bottom:16px; flex-wrap:wrap; }}
   .controls button {{ font-family:'Chakra Petch',sans-serif; font-size:13px; color:var(--accent-orange); background:var(--accent-orange-dim); border:1px solid #ff6b2c40; padding:8px 18px; border-radius:6px; cursor:pointer; transition:all 0.2s; }}
   .controls button:hover {{ background:#ff6b2c22; border-color:var(--accent-orange); }}
+  .date-filter {{ display:flex; align-items:center; gap:8px; margin-right:auto; }}
+  .date-filter label {{ font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--text-dim); letter-spacing:0.5px; }}
+  .date-filter select {{ font-family:'JetBrains Mono',monospace; font-size:13px; color:var(--accent-orange); background:var(--bg-card); border:1px solid #ff6b2c40; padding:8px 14px; border-radius:6px; cursor:pointer; appearance:none; outline:none; transition:all 0.2s; -webkit-appearance:none; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23ff6b2c' d='M6 8L1 3h10z'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 10px center; padding-right:30px; }}
+  .date-filter select:hover {{ background-color:var(--bg-card-hover); border-color:var(--accent-orange); }}
+  .date-filter select option {{ background:var(--bg-card); color:var(--text-primary); }}
   .street-brawl-tag {{ font-family:'JetBrains Mono',monospace; font-size:10px; font-weight:600; padding:2px 6px; border-radius:3px; color:#ffb347; background:#ffb34715; border:1px solid #ffb34730; white-space:nowrap; flex-shrink:0; margin-top:2px; letter-spacing:0.5px; text-transform:uppercase; }}
   .wiki-link {{ display:inline-block; margin-top:12px; font-family:'JetBrains Mono',monospace; font-size:11px; letter-spacing:0.5px; color:var(--text-dim); background:#ffffff08; border:1px solid var(--border); padding:5px 12px; border-radius:5px; text-decoration:none; transition:all 0.2s; }}
   .wiki-link:hover {{ color:var(--accent-orange); border-color:var(--accent-orange); background:var(--accent-orange-dim); }}
@@ -424,6 +472,7 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
   </div>
 
   <div class="controls">
+    {date_filter}
     <button onclick="toggleAll()">Expand / Collapse All</button>
   </div>
 
@@ -441,6 +490,41 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
     const c=document.querySelectorAll('.hero-card,.item-group,.item-card');
     const allOpen=[...c].every(x=>x.classList.contains('open'));
     c.forEach(x=>{{ if(allOpen) x.classList.remove('open'); else x.classList.add('open'); }});
+  }}
+  function filterByDate(date){{
+    const showAll=date==='all';
+    // Show/hide individual change items based on date
+    document.querySelectorAll('.change-item').forEach(el=>{{
+      const d=el.dataset.date;
+      if(showAll||!d||d===date) el.style.display='';
+      else el.style.display='none';
+    }});
+    // Hide hero cards where ALL changes are hidden
+    document.querySelectorAll('.hero-card').forEach(card=>{{
+      const items=card.querySelectorAll('.change-item');
+      const anyVisible=[...items].some(el=>el.style.display!=='none');
+      card.style.display=anyVisible?'':'none';
+    }});
+    // Hide item cards where ALL changes are hidden
+    document.querySelectorAll('.item-card').forEach(card=>{{
+      const items=card.querySelectorAll('.change-item');
+      const anyVisible=[...items].some(el=>el.style.display!=='none');
+      card.style.display=anyVisible?'':'none';
+    }});
+    // Hide item groups where ALL item cards are hidden
+    document.querySelectorAll('.item-group').forEach(group=>{{
+      const cards=group.querySelectorAll('.item-card');
+      const anyVisible=[...cards].some(c=>c.style.display!=='none');
+      group.style.display=anyVisible?'':'none';
+    }});
+    // Hide system section if no visible changes
+    const sysCard=document.querySelector('.system-card');
+    if(sysCard){{
+      const items=sysCard.querySelectorAll('.change-item');
+      const anyVisible=[...items].some(el=>el.style.display!=='none');
+      const sysSection=sysCard.closest('.system-section');
+      if(sysSection) sysSection.style.display=anyVisible?'':'none';
+    }}
   }}
   function renderStars(){{
     document.querySelectorAll('.stars').forEach(el=>{{

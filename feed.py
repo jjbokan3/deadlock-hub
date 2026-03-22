@@ -238,6 +238,12 @@ def extract_from_html(html: str) -> str:
                     logger.info(f"  Post {i+1}: skipped (Steam URL unfurl only)")
                     continue
 
+            # Extract post date from <time> element
+            time_match = re.search(
+                r'<time[^>]*datetime="(\d{4})-(\d{2})-(\d{2})T',
+                post_html
+            )
+
             # Find the bbWrapper within this post
             bb_match = re.search(
                 r'<div class="bbWrapper">(.*?)</div>\s*(?:</div>|<div class="js-selectToQuoteEnd">)',
@@ -248,6 +254,12 @@ def extract_from_html(html: str) -> str:
             if bb_match:
                 lines = _extract_bbwrapper(bb_match.group(1))
                 if lines:
+                    # Inject date header before this post's lines so the parser
+                    # can tag each change with the date it was actually posted
+                    if time_match:
+                        y, m, d = time_match.group(1), time_match.group(2), time_match.group(3)
+                        date_header = f"[ {m}-{d}-{y} Update: ]"
+                        all_lines.append(date_header)
                     logger.info(f"  Post {i+1}: {len(lines)} lines")
                     all_lines.extend(lines)
     else:
@@ -304,11 +316,21 @@ def fetch_patch_notes(thread_url: str) -> str:
 
         # On the first page, check for Steam news URLs in Yoshi's posts
         if page == 1:
+            # Extract the first Yoshi post's date for the initial Steam content
+            first_time = re.search(
+                r'<article[^>]*\bdata-author="Yoshi"[^>]*>.*?'
+                r'<time[^>]*datetime="(\d{4})-(\d{2})-(\d{2})T',
+                html, re.DOTALL
+            )
             steam_urls = _extract_steam_urls(html)
             for steam_url in steam_urls:
                 if steam_url not in steam_urls_fetched:
                     steam_urls_fetched.add(steam_url)
                     try:
+                        # Inject the thread date header before Steam content
+                        if first_time:
+                            y, m, d = first_time.group(1), first_time.group(2), first_time.group(3)
+                            all_lines.append(f"[ {m}-{d}-{y} Update: ]")
                         steam_lines = _fetch_steam_patch_notes(steam_url)
                         all_lines.extend(steam_lines)
                     except Exception as e:
@@ -323,10 +345,22 @@ def fetch_patch_notes(thread_url: str) -> str:
                 # that's also in the forum follow-up posts
                 seen_lines = set(all_lines)
                 new_lines = [l for l in forum_lines if l not in seen_lines]
-                if len(new_lines) < len(forum_lines):
-                    skipped = len(forum_lines) - len(new_lines)
+                # Remove orphaned date headers (date header with no content after it)
+                cleaned = []
+                for j, line in enumerate(new_lines):
+                    if re.match(r'^\[.*\d{2}-\d{2}-\d{4}.*\]$', line):
+                        # Check if next non-header line exists
+                        has_content = any(
+                            not re.match(r'^\[.*\]$', new_lines[k])
+                            for k in range(j + 1, len(new_lines))
+                        )
+                        if not has_content:
+                            continue
+                    cleaned.append(line)
+                if len(forum_lines) - len(cleaned) > 0:
+                    skipped = len(forum_lines) - len(cleaned)
                     logger.info(f"  Deduped {skipped} lines already in Steam content")
-                all_lines.extend(new_lines)
+                all_lines.extend(cleaned)
             else:
                 all_lines.extend(forum_lines)
 
