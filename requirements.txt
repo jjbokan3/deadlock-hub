@@ -2,7 +2,7 @@
 requests>=2.28
 rich>=13.0
 
-# LLM providers (install what you need)
-# pip install anthropic      # for --llm claude
-# pip install openai         # for --llm openai
+# LLM providers
+anthropic>=0.40            # for --llm claude
+# pip install openai       # for --llm openai (optional)
 # Ollama uses requests only  # for --llm ollama
