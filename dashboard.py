@@ -580,7 +580,11 @@ def main():
     args = parser.parse_args()
 
     os.makedirs(LOGS_DIR, exist_ok=True)
-    server = HTTPServer(("127.0.0.1", args.port), DashboardHandler)
+
+    class ReusableHTTPServer(HTTPServer):
+        allow_reuse_address = True
+
+    server = ReusableHTTPServer(("127.0.0.1", args.port), DashboardHandler)
     logger.info(f"Dashboard running at http://localhost:{args.port}/")
     logger.info("Bound to 127.0.0.1 only (not publicly accessible)")
 

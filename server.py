@@ -133,7 +133,11 @@ def main():
             logger.warning(f"Could not generate heroes page: {e}")
 
     handler = partial(SiteHandler, directory=site_dir)
-    server = HTTPServer((args.host, args.port), handler)
+
+    class ReusableHTTPServer(HTTPServer):
+        allow_reuse_address = True
+
+    server = ReusableHTTPServer((args.host, args.port), handler)
 
     logger.info(f"Serving {site_dir}")
     logger.info(f"  Root:     http://localhost:{args.port}/")
