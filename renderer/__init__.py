@@ -91,7 +91,6 @@ def _render_rating_badge(rating: LLMRating, small: bool = False) -> str:
     sm = " sm" if small else ""
     return (
         f'<div class="rating-badge rating-{rating.rating}{sm}">'
-        f'<div class="stars"></div>'
         f'{_e(rating.label)}'
         f'</div>'
     )
@@ -447,7 +446,6 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
     --ability-4-bg: #ffcf3e12; --ability-innate-bg: #ff6b8a12; --ability-general-bg: #8b90a512;
     --rating-1: #ff3b3b; --rating-2: #ff8c42; --rating-3: #a0a5b8;
     --rating-4: #5dff7e; --rating-5: #3ecfff;
-    --star-filled: #ff6b2c; --star-empty: #2a2e3e;
     --sidebar-w: 360px;
   }}
   * {{ margin:0; padding:0; box-sizing:border-box; }}
@@ -504,7 +502,6 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
   .si-name {{ font-family:'Rajdhani',sans-serif; font-size:15px; font-weight:600; letter-spacing:0.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
   .si-meta {{ font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--text-dim); }}
   .sidebar-item .rating-badge {{ font-size:10px; padding:3px 8px; flex-shrink:0; }}
-  .sidebar-item .rating-badge .stars {{ display:none; }}
 
   /* ── Detail panel ── */
   .detail-panel {{ flex:1; overflow-y:auto; padding:0; background:var(--bg-deep); }}
@@ -554,15 +551,13 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
   .street-brawl-tag {{ font-family:'JetBrains Mono',monospace; font-size:10px; font-weight:600; padding:2px 6px; border-radius:3px; color:#ffb347; background:#ffb34715; border:1px solid #ffb34730; white-space:nowrap; flex-shrink:0; margin-top:2px; letter-spacing:0.5px; text-transform:uppercase; }}
 
   /* ── Rating ── */
-  .rating-badge {{ display:flex; align-items:center; gap:8px; padding:6px 14px; border-radius:6px; font-family:'JetBrains Mono',monospace; font-size:12px; font-weight:600; letter-spacing:1px; text-transform:uppercase; white-space:nowrap; }}
+  .rating-badge {{ display:inline-flex; align-items:center; padding:6px 14px; border-radius:6px; font-family:'JetBrains Mono',monospace; font-size:12px; font-weight:600; letter-spacing:1px; text-transform:uppercase; white-space:nowrap; }}
   .rating-badge.sm {{ font-size:11px; padding:4px 10px; }}
-  .rating-badge.sm .stars {{ gap:2px; }} .rating-badge.sm .star {{ width:11px; height:11px; }}
   .rating-1 {{ background:#ff3b3b18; color:var(--rating-1); border:1px solid #ff3b3b30; }}
   .rating-2 {{ background:#ff8c4218; color:var(--rating-2); border:1px solid #ff8c4230; }}
   .rating-3 {{ background:#a0a5b818; color:var(--rating-3); border:1px solid #a0a5b830; }}
   .rating-4 {{ background:#5dff7e18; color:var(--rating-4); border:1px solid #5dff7e30; }}
   .rating-5 {{ background:#3ecfff18; color:var(--rating-5); border:1px solid #3ecfff30; }}
-  .stars {{ display:flex; gap:3px; }} .star {{ width:14px; height:14px; display:inline-block; }} .star svg {{ width:100%; height:100%; }}
   .rating-explanation {{ padding:16px 18px; background:#ffffff06; border-left:3px solid var(--accent-orange); border-radius:0 8px 8px 0; font-size:14px; color:var(--text-secondary); line-height:1.65; margin-bottom:20px; }}
   .rating-explanation strong {{ color:var(--text-primary); font-weight:600; }}
 
@@ -817,25 +812,6 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
         : `${{visible}} / ${{total}} changes`;
     }}
   }}
-
-  /* ── Stars ── */
-  function renderStars() {{
-    document.querySelectorAll('.stars').forEach(el => {{
-      const b = el.closest('.rating-badge'); let n = 3;
-      if (b.classList.contains('rating-1')) n = 1;
-      else if (b.classList.contains('rating-2')) n = 2;
-      else if (b.classList.contains('rating-3')) n = 3;
-      else if (b.classList.contains('rating-4')) n = 4;
-      else if (b.classList.contains('rating-5')) n = 5;
-      let h = '';
-      for (let i = 0; i < 5; i++) {{
-        const f = i < n;
-        h += `<span class="star"><svg viewBox="0 0 20 20" fill="${{f ? 'var(--star-filled)' : 'var(--star-empty)'}}"><path d="M10 1.5l2.47 5.01 5.53.8-4 3.9.94 5.49L10 14.26 5.06 16.7 6 11.21l-4-3.9 5.53-.8z"/></svg></span>`;
-      }}
-      el.innerHTML = h;
-    }});
-  }}
-  renderStars();
 
   /* ── Runtime image injection ── */
   const HEROES_URL = 'https://assets.deadlock-api.com/v2/heroes';
