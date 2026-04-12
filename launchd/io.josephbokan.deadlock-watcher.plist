@@ -10,9 +10,9 @@
         <string>/Users/josephbokan/deadlock-patch-tool-prod/.venv/bin/python3</string>
         <string>watcher.py</string>
         <string>--interval</string>
-        <string>300</string>
+        <string>900</string>
         <string>--llm</string>
-        <string>heuristic</string>
+        <string>claude</string>
         <string>--output-dir</string>
         <string>./site/deadlock/updates</string>
     </array>

@@ -61,12 +61,22 @@ RATING_STYLES = {
 
 
 def _rate_with_progress(label, change_groups, entity_type, provider):
-    """Rate all entities in a group with a Rich progress bar."""
+    """Rate all entities in a group with a Rich progress bar.
+
+    Rates each day's changes separately, then sets the overall rating
+    as the most recent day's rating (or the only day's rating).
+    """
     total = len(change_groups)
     if total == 0:
         return
 
     results = []
+
+    # Count total rating calls needed (one per entity per day)
+    total_calls = 0
+    for group in change_groups.values():
+        dates = group.dates()
+        total_calls += max(len(dates), 1)  # at least 1 if no dates
 
     with Progress(
         SpinnerColumn("dots"),
@@ -79,15 +89,34 @@ def _rate_with_progress(label, change_groups, entity_type, provider):
         console=console,
         transient=False,
     ) as progress:
-        task = progress.add_task(label, total=total, current="")
+        task = progress.add_task(label, total=total_calls, current="")
 
         for name, group in change_groups.items():
-            progress.update(task, current=name)
-            group.rating = provider.rate_changes(name, entity_type, group.changes)
+            dates = group.dates()
+
+            if len(dates) <= 1:
+                # Single day (or no dates) — rate all changes together
+                progress.update(task, current=name)
+                rating = provider.rate_changes(name, entity_type, group.changes)
+                group.rating = rating
+                if dates:
+                    group.day_ratings[dates[0]] = rating
+                progress.advance(task)
+            else:
+                # Multiple days — rate each day separately
+                for date in dates:
+                    day_changes = group.changes_for_date(date)
+                    progress.update(task, current=f"{name} ({date})")
+                    day_rating = provider.rate_changes(name, entity_type, day_changes)
+                    group.day_ratings[date] = day_rating
+                    progress.advance(task)
+
+                # Overall rating = most recent day's rating
+                group.rating = group.day_ratings[dates[-1]]
+
             r = group.rating
             sym, style = RATING_STYLES.get(r.rating, ("—", "dim"))
             results.append((name, r.rating, sym, style))
-            progress.advance(task)
 
         progress.update(task, current="[green]done[/green]")
 

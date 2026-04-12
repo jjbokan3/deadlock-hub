@@ -1,6 +1,7 @@
 """HTML renderer — generates a split-pane patch notes page from structured data."""
 from __future__ import annotations
 import html as html_lib
+import json
 import re
 from models import (
     ParsedPatchNotes, HeroChangeGroup, ItemChangeGroup,
@@ -242,33 +243,58 @@ def _render_system_detail(changes: list[Change]) -> str:
     )
 
 
+def _render_day_tabs(dates: list[str], day_ratings: dict, eid: str) -> str:
+    """Render day picker tabs for entities with changes across multiple days."""
+    if len(dates) <= 1:
+        return ""
+    tabs = [f'<button class="day-tab active" data-date="all" onclick="switchDayTab(\'{eid}\', \'all\')">All Days</button>']
+    for d in dates:
+        dr = day_ratings.get(d)
+        badge = f' <span class="day-tab-badge rating-{dr.rating}">{_e(dr.label)}</span>' if dr else ''
+        tabs.append(
+            f'<button class="day-tab" data-date="{d}" onclick="switchDayTab(\'{eid}\', \'{d}\')">'
+            f'{d}{badge}</button>'
+        )
+    return f'<div class="day-tabs" data-entity-id="{eid}">{"".join(tabs)}</div>'
+
+
+def _render_day_explanations(dates: list[str], day_ratings: dict, overall_rating) -> str:
+    """Render per-day rating explanations (hidden by default, shown when tab selected)."""
+    parts = []
+    # Overall explanation (shown when "All Days" tab is active)
+    r = overall_rating or LLMRating.from_score(3, "")
+    if r.explanation:
+        parts.append(
+            f'<div class="rating-explanation day-explanation" data-day="all">'
+            f'<strong>Rating: {r.rating} — {_e(r.label)}.</strong> '
+            f'{_e(r.explanation)}'
+            f'</div>'
+        )
+    # Per-day explanations
+    for d in dates:
+        dr = day_ratings.get(d)
+        if not dr or not dr.explanation:
+            continue
+        parts.append(
+            f'<div class="rating-explanation day-explanation" data-day="{d}" style="display:none">'
+            f'<strong>{d} — Rating: {dr.rating} — {_e(dr.label)}.</strong> '
+            f'{_e(dr.explanation)}'
+            f'</div>'
+        )
+    return "\n".join(parts)
+
+
 def _render_hero_detail(group: HeroChangeGroup) -> str:
     eid = f"hero-{_safe_id(group.hero.name)}"
     rating = group.rating or LLMRating.from_score(3, "")
     badge = _render_rating_badge(rating)
     sorted_changes = _sort_changes(group.changes)
     changes_html = "\n".join(_render_change(c, hero_name=group.hero.name) for c in sorted_changes)
-    explanation = ""
-    if rating.explanation:
-        explanation = (
-            f'<div class="rating-explanation">'
-            f'<strong>Rating: {rating.rating} — {_e(rating.label)}.</strong> '
-            f'{_e(rating.explanation)}'
-            f'</div>'
-        )
     wiki = _wiki_url(group.hero.name)
     # Count buffs/nerfs
     buffs = sum(1 for c in group.changes if c.direction == ChangeDirection.BUFF)
     nerfs = sum(1 for c in group.changes if c.direction == ChangeDirection.NERF)
     neutral = len(group.changes) - buffs - nerfs
-    stats_html = (
-        f'<div class="detail-stats">'
-        f'<span class="ds buff">▲ {buffs} buff{"s" if buffs != 1 else ""}</span>'
-        f'<span class="ds nerf">▼ {nerfs} nerf{"s" if nerfs != 1 else ""}</span>'
-        f'{"<span class=&quot;ds neutral&quot;>● " + str(neutral) + " other</span>" if neutral else ""}'
-        f'</div>'
-    )
-    # Fix the neutral HTML with proper escaping
     stats_parts = [
         f'<span class="ds buff">▲ {buffs} buff{"s" if buffs != 1 else ""}</span>',
         f'<span class="ds nerf">▼ {nerfs} nerf{"s" if nerfs != 1 else ""}</span>',
@@ -277,8 +303,19 @@ def _render_hero_detail(group: HeroChangeGroup) -> str:
         stats_parts.append(f'<span class="ds neutral">● {neutral} other</span>')
     stats_html = f'<div class="detail-stats">{"".join(stats_parts)}</div>'
 
+    dates = group.dates()
+    day_tabs = _render_day_tabs(dates, group.day_ratings, eid)
+    day_explanations = _render_day_explanations(dates, group.day_ratings, rating)
+
+    # Build day_ratings JSON for JS (includes "all" for overall)
+    dr_json = ""
+    if group.day_ratings:
+        dr_data = {d: {"rating": r.rating, "label": r.label} for d, r in group.day_ratings.items()}
+        dr_data["all"] = {"rating": rating.rating, "label": rating.label}
+        dr_json = f' data-day-ratings=\'{_e(json.dumps(dr_data))}\''
+
     return (
-        f'<div class="detail-section" id="detail-{eid}" style="display:none">'
+        f'<div class="detail-section" id="detail-{eid}" style="display:none"{dr_json}>'
         f'<div class="detail-header">'
         f'<div class="detail-portrait" data-hero-name="{_e(group.hero.name)}"></div>'
         f'<div class="detail-title-area">'
@@ -287,7 +324,8 @@ def _render_hero_detail(group: HeroChangeGroup) -> str:
         f'</div>'
         f'<div class="detail-rating">{badge}</div>'
         f'</div>'
-        f'{explanation}'
+        f'{day_tabs}'
+        f'{day_explanations}'
         f'<div class="changes-list">{changes_html}</div>'
         f'<a href="{wiki}" target="_blank" rel="noopener" class="wiki-link">View on Wiki ↗</a>'
         f'</div>'
@@ -300,14 +338,6 @@ def _render_item_detail(group: ItemChangeGroup) -> str:
     badge = _render_rating_badge(rating)
     sorted_changes = _sort_changes(group.changes)
     changes_html = "\n".join(_render_change(c, show_ability=False) for c in sorted_changes)
-    explanation = ""
-    if rating.explanation:
-        explanation = (
-            f'<div class="rating-explanation">'
-            f'<strong>Rating: {rating.rating} — {_e(rating.label)}.</strong> '
-            f'{_e(rating.explanation)}'
-            f'</div>'
-        )
     wiki = _wiki_url(group.item.name)
     buffs = sum(1 for c in group.changes if c.direction == ChangeDirection.BUFF)
     nerfs = sum(1 for c in group.changes if c.direction == ChangeDirection.NERF)
@@ -322,8 +352,18 @@ def _render_item_detail(group: ItemChangeGroup) -> str:
 
     cat_title, cat_cls, cat_icon = CATEGORY_META.get(group.item.category, CATEGORY_META[ItemCategory.UNKNOWN])
 
+    dates = group.dates()
+    day_tabs = _render_day_tabs(dates, group.day_ratings, eid)
+    day_explanations = _render_day_explanations(dates, group.day_ratings, rating)
+
+    dr_json = ""
+    if group.day_ratings:
+        dr_data = {d: {"rating": r.rating, "label": r.label} for d, r in group.day_ratings.items()}
+        dr_data["all"] = {"rating": rating.rating, "label": rating.label}
+        dr_json = f' data-day-ratings=\'{_e(json.dumps(dr_data))}\''
+
     return (
-        f'<div class="detail-section" id="detail-{eid}" style="display:none">'
+        f'<div class="detail-section" id="detail-{eid}" style="display:none"{dr_json}>'
         f'<div class="detail-header">'
         f'<div class="detail-portrait detail-portrait-item" data-item-name="{_e(group.item.name)}"></div>'
         f'<div class="detail-title-area">'
@@ -333,7 +373,8 @@ def _render_item_detail(group: ItemChangeGroup) -> str:
         f'</div>'
         f'<div class="detail-rating">{badge}</div>'
         f'</div>'
-        f'{explanation}'
+        f'{day_tabs}'
+        f'{day_explanations}'
         f'<div class="changes-list">{changes_html}</div>'
         f'<a href="{wiki}" target="_blank" rel="noopener" class="wiki-link">View on Wiki ↗</a>'
         f'</div>'
@@ -564,6 +605,18 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
   .wiki-link {{ display:inline-block; margin-top:12px; font-family:'JetBrains Mono',monospace; font-size:11px; letter-spacing:0.5px; color:var(--text-dim); background:#ffffff08; border:1px solid var(--border); padding:5px 12px; border-radius:5px; text-decoration:none; transition:all 0.2s; }}
   .wiki-link:hover {{ color:var(--accent-orange); border-color:var(--accent-orange); background:var(--accent-orange-dim); }}
 
+  /* ── Day tabs ── */
+  .day-tabs {{ display:flex; gap:6px; margin-bottom:16px; flex-wrap:wrap; }}
+  .day-tab {{ font-family:'JetBrains Mono',monospace; font-size:12px; padding:6px 14px; border-radius:6px; border:1px solid var(--border); background:var(--bg-card); color:var(--text-secondary); cursor:pointer; transition:all 0.15s; display:inline-flex; align-items:center; gap:6px; }}
+  .day-tab:hover {{ border-color:var(--border-hover); background:var(--bg-card-hover); color:var(--text-primary); }}
+  .day-tab.active {{ border-color:var(--accent-orange); color:var(--accent-orange); background:var(--accent-orange-dim); }}
+  .day-tab-badge {{ font-size:10px; padding:2px 6px; border-radius:4px; font-weight:600; letter-spacing:0.5px; text-transform:uppercase; }}
+  .day-tab-badge.rating-1 {{ background:#ff3b3b18; color:var(--rating-1); }}
+  .day-tab-badge.rating-2 {{ background:#ff8c4218; color:var(--rating-2); }}
+  .day-tab-badge.rating-3 {{ background:#a0a5b818; color:var(--rating-3); }}
+  .day-tab-badge.rating-4 {{ background:#5dff7e18; color:var(--rating-4); }}
+  .day-tab-badge.rating-5 {{ background:#3ecfff18; color:var(--rating-5); }}
+
   .ability-icon {{ width:18px; height:18px; border-radius:4px; object-fit:contain; vertical-align:middle; margin-right:2px; opacity:0; transition:opacity 0.3s; flex-shrink:0; margin-top:1px; }}
   .ability-icon.loaded {{ opacity:1; }}
 
@@ -758,6 +811,34 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
         }}
       }}
     }});
+    // Sync day tabs in all detail panels
+    document.querySelectorAll('.day-tabs').forEach(tabs => {{
+      const eid = tabs.dataset.entityId;
+      // Activate matching day tab (or "all")
+      tabs.querySelectorAll('.day-tab').forEach(tab => {{
+        tab.classList.toggle('active', tab.dataset.date === date);
+      }});
+      // Update explanation visibility
+      const section = document.getElementById('detail-' + eid);
+      if (section) {{
+        section.querySelectorAll('.day-explanation').forEach(el => {{
+          el.style.display = el.dataset.day === date ? '' : 'none';
+        }});
+        // Update rating badge
+        const badgeEl = section.querySelector('.detail-rating .rating-badge');
+        const drRaw = section.dataset.dayRatings;
+        if (badgeEl && drRaw) {{
+          try {{
+            const dayRatings = JSON.parse(drRaw);
+            const dr = dayRatings[date];
+            if (dr) {{
+              badgeEl.className = 'rating-badge rating-' + dr.rating;
+              badgeEl.textContent = dr.label;
+            }}
+          }} catch(e) {{}}
+        }}
+      }}
+    }});
     // Re-apply search filter (handles visibility + section counts)
     const q = document.querySelector('.sidebar-search');
     filterSidebar(q ? q.value : '');
@@ -811,6 +892,56 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
         ? `${{total}} changes`
         : `${{visible}} / ${{total}} changes`;
     }}
+  }}
+
+  /* ── Day tab switching ── */
+  function switchDayTab(entityId, date) {{
+    const section = document.getElementById('detail-' + entityId);
+    if (!section) return;
+
+    // Update tab active state
+    section.querySelectorAll('.day-tab').forEach(tab => {{
+      tab.classList.toggle('active', tab.dataset.date === date);
+    }});
+
+    // Filter change items by date within this section only
+    const showAll = date === 'all';
+    section.querySelectorAll('.change-item').forEach(el => {{
+      const d = el.dataset.date;
+      el.style.display = (showAll || !d || d === date) ? '' : 'none';
+    }});
+
+    // Switch explanation
+    section.querySelectorAll('.day-explanation').forEach(el => {{
+      el.style.display = el.dataset.day === date ? '' : 'none';
+    }});
+
+    // Update rating badge for selected day
+    const badgeEl = section.querySelector('.detail-rating .rating-badge');
+    if (badgeEl) {{
+      const drRaw = section.dataset.dayRatings;
+      if (drRaw) {{
+        try {{
+          const dayRatings = JSON.parse(drRaw);
+          const dr = dayRatings[date];
+          if (dr) {{
+            badgeEl.className = 'rating-badge rating-' + dr.rating;
+            badgeEl.textContent = dr.label;
+          }}
+        }} catch(e) {{}}
+      }}
+    }}
+
+    // Sync the global sidebar date filter dropdown
+    const dateFilter = document.getElementById('dateFilter');
+    if (dateFilter && dateFilter.value !== date) {{
+      dateFilter.value = date;
+      filterByDate(date);
+      return; // filterByDate already calls updateDetailCounts
+    }}
+
+    // Update buff/nerf counts
+    updateDetailCounts();
   }}
 
   /* ── Runtime image injection ── */
