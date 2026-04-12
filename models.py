@@ -95,6 +95,13 @@ class HeroChangeGroup:
     hero: HeroData
     changes: list[Change] = field(default_factory=list)
     rating: Optional[LLMRating] = None
+    day_ratings: dict[str, LLMRating] = field(default_factory=dict)  # date → rating
+
+    def changes_for_date(self, date: str) -> list[Change]:
+        return [c for c in self.changes if c.date == date]
+
+    def dates(self) -> list[str]:
+        return sorted({c.date for c in self.changes if c.date})
 
 
 @dataclass
@@ -102,6 +109,13 @@ class ItemChangeGroup:
     item: ItemData
     changes: list[Change] = field(default_factory=list)
     rating: Optional[LLMRating] = None
+    day_ratings: dict[str, LLMRating] = field(default_factory=dict)  # date → rating
+
+    def changes_for_date(self, date: str) -> list[Change]:
+        return [c for c in self.changes if c.date == date]
+
+    def dates(self) -> list[str]:
+        return sorted({c.date for c in self.changes if c.date})
 
 
 @dataclass

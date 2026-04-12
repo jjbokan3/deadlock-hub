@@ -86,19 +86,26 @@ def fetch_rss(url: str = CHANGELOG_RSS) -> list[dict]:
     return entries
 
 
-def load_seen() -> set[str]:
-    """Load set of already-processed patch IDs."""
+def load_seen() -> dict[str, str]:
+    """Load map of already-processed patch IDs to their content hashes.
+
+    Migrates from the old format (list of IDs) to the new format (dict of ID → hash).
+    """
     if os.path.exists(SEEN_FILE):
         with open(SEEN_FILE, encoding="utf-8") as f:
-            return set(json.load(f))
-    return set()
+            data = json.load(f)
+        # Migrate from old list format to new dict format
+        if isinstance(data, list):
+            return {pid: "" for pid in data}
+        return data
+    return {}
 
 
-def save_seen(seen: set[str]):
-    """Persist the set of processed patch IDs."""
+def save_seen(seen: dict[str, str]):
+    """Persist the map of processed patch IDs → content hashes."""
     os.makedirs(os.path.dirname(SEEN_FILE), exist_ok=True)
     with open(SEEN_FILE, "w", encoding="utf-8") as f:
-        json.dump(sorted(seen), f)
+        json.dump(seen, f, indent=2)
 
 
 def fetch_patch_text(url: str) -> str:
@@ -147,9 +154,15 @@ def run_pipeline(patch_text: str, title: str, output_dir: str, llm: str, extra_a
     return html_path if result.returncode == 0 else None
 
 
-def check_and_process(output_dir: str, llm: str, extra_args: list[str], max_new: int = 0) -> int:
-    """Check RSS for new patches and process any new ones. Returns count of new patches.
+def _content_hash(text: str) -> str:
+    """Hash patch text content to detect changes from new posts."""
+    return hashlib.md5(text.encode()).hexdigest()
 
+
+def check_and_process(output_dir: str, llm: str, extra_args: list[str], max_new: int = 0) -> int:
+    """Check RSS for new or updated patches and process them. Returns count processed.
+
+    Detects both new threads and updated threads (new follow-up posts by Yoshi).
     If max_new > 0, only process at most that many of the newest unseen entries.
     """
     try:
@@ -161,15 +174,17 @@ def check_and_process(output_dir: str, llm: str, extra_args: list[str], max_new:
     seen = load_seen()
     new_count = 0
 
+    # Split into unseen (brand new threads) and seen (check for updates)
     unseen = [e for e in entries if e["id"] not in seen]
     if max_new > 0 and len(unseen) > max_new:
         # Mark the older ones as seen without processing
         for entry in unseen[max_new:]:
             logger.info(f"Skipping older patch (cold start): {entry['title']}")
-            seen.add(entry["id"])
+            seen[entry["id"]] = ""
         save_seen(seen)
         unseen = unseen[:max_new]
 
+    # Process new threads
     for entry in unseen:
         if entry["id"] in seen:
             continue
@@ -181,13 +196,13 @@ def check_and_process(output_dir: str, llm: str, extra_args: list[str], max_new:
             patch_text = fetch_patch_text(entry["link"])
         except Exception as e:
             logger.error(f"Failed to fetch patch text: {e}")
-            seen.add(entry["id"])
+            seen[entry["id"]] = ""
             save_seen(seen)
             continue
 
         if not patch_text.strip():
             logger.warning("Extracted empty patch text, skipping")
-            seen.add(entry["id"])
+            seen[entry["id"]] = ""
             save_seen(seen)
             continue
 
@@ -196,7 +211,47 @@ def check_and_process(output_dir: str, llm: str, extra_args: list[str], max_new:
 
         result = run_pipeline(patch_text, entry["title"], output_dir, llm, extra_args)
 
-        seen.add(entry["id"])
+        seen[entry["id"]] = _content_hash(patch_text)
+        save_seen(seen)
+        new_count += 1
+
+    # Check recently-seen threads for updated content (new follow-up posts).
+    # Only check threads from the current RSS feed (i.e. recent threads).
+    for entry in entries:
+        if entry["id"] not in seen:
+            continue  # will be handled above on next iteration
+        old_hash = seen[entry["id"]]
+        if not old_hash:
+            # Migrated from old format — no hash stored yet, fetch to establish baseline
+            try:
+                patch_text = fetch_patch_text(entry["link"])
+                seen[entry["id"]] = _content_hash(patch_text) if patch_text.strip() else ""
+                save_seen(seen)
+            except Exception:
+                pass
+            continue
+
+        # Re-fetch and compare
+        try:
+            patch_text = fetch_patch_text(entry["link"])
+        except Exception as e:
+            logger.error(f"Failed to re-fetch {entry['title']}: {e}")
+            continue
+
+        if not patch_text.strip():
+            continue
+
+        new_hash = _content_hash(patch_text)
+        if new_hash == old_hash:
+            continue
+
+        logger.info(f"Updated content detected: {entry['title']}")
+        line_count = len(patch_text.strip().splitlines())
+        logger.info(f"  Now {line_count} lines (was different)")
+
+        result = run_pipeline(patch_text, entry["title"], output_dir, llm, extra_args)
+
+        seen[entry["id"]] = new_hash
         save_seen(seen)
         new_count += 1
 
@@ -207,7 +262,7 @@ def check_and_process(output_dir: str, llm: str, extra_args: list[str], max_new:
         try:
             from index_generator import write_index
             write_index(output_dir)
-            logger.info(f"Index regenerated ({new_count} new patch(es))")
+            logger.info(f"Index regenerated ({new_count} new/updated patch(es))")
         except Exception as e:
             logger.warning(f"Failed to regenerate index: {e}")
 

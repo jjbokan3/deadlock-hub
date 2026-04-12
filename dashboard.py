@@ -137,13 +137,13 @@ def _manual_poll(llm: str = "heuristic") -> str:
     ]
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=300,
+            cmd, capture_output=True, text=True, timeout=1200,
             cwd=PROJECT_DIR,
         )
         output = result.stderr + result.stdout
         return output if output.strip() else "(no output)"
     except subprocess.TimeoutExpired:
-        return "Timed out after 5 minutes"
+        return "Timed out after 20 minutes"
     except Exception as e:
         return f"Error: {e}"
 
@@ -171,12 +171,12 @@ def _deploy() -> str:
     try:
         result = subprocess.run(
             ["bash", script],
-            capture_output=True, text=True, timeout=300,
+            capture_output=True, text=True, timeout=1200,
             cwd=PROJECT_DIR,
         )
         return result.stdout + result.stderr
     except subprocess.TimeoutExpired:
-        return "Deploy timed out after 5 minutes"
+        return "Deploy timed out after 20 minutes"
     except Exception as e:
         return f"Deploy error: {e}"
 
