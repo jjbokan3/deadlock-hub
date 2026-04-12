@@ -144,6 +144,19 @@ def _render_sidebar(data: ParsedPatchNotes) -> str:
 
     sections = []
 
+    # Overview entry
+    overview_item = (
+        f'<div class="sidebar-item sidebar-item-overview active" data-entity-id="overview" '
+        f'data-entity-type="overview" data-entity-name="overview">'
+        f'<div class="si-portrait si-portrait-system">📋</div>'
+        f'<div class="si-info">'
+        f'<div class="si-name">Overview</div>'
+        f'<div class="si-meta">Summary &amp; tier list</div>'
+        f'</div>'
+        f'</div>'
+    )
+    sections.append(f'<div class="sidebar-section" data-section="overview">{overview_item}</div>')
+
     # System changes entry
     if data.system_changes:
         sys_dates = _entity_dates(data.system_changes)
@@ -284,12 +297,68 @@ def _render_day_explanations(dates: list[str], day_ratings: dict, overall_rating
     return "\n".join(parts)
 
 
+def _ability_group_direction(changes: list[Change]) -> tuple[str, str]:
+    """Compute the overall direction for a group of changes. Returns (symbol, css_class)."""
+    buffs = sum(1 for c in changes if c.direction == ChangeDirection.BUFF)
+    nerfs = sum(1 for c in changes if c.direction == ChangeDirection.NERF)
+    if buffs > nerfs:
+        return ("▲", "buff")
+    elif nerfs > buffs:
+        return ("▼", "nerf")
+    else:
+        return ("●", "neutral")
+
+
+def _render_grouped_changes(changes: list[Change], hero_name: str) -> str:
+    """Render hero changes grouped by ability with per-group direction indicators."""
+    # Group changes by ability slot (0 = base/general)
+    groups: dict[int, list[Change]] = {}
+    for c in changes:
+        slot = c.ability_slot or 0
+        groups.setdefault(slot, []).append(c)
+
+    html_parts = []
+    slot_labels = {0: "General", 1: "Ability 1", 2: "Ability 2", 3: "Ability 3", 4: "Ultimate"}
+    slot_order = sorted(groups.keys())
+
+    for slot in slot_order:
+        slot_changes = groups[slot]
+        sym, dir_cls = _ability_group_direction(slot_changes)
+
+        # Get ability name from first change that has one
+        ability_name = ""
+        for c in slot_changes:
+            if c.ability_name:
+                ability_name = c.ability_name
+                break
+
+        label = ability_name or slot_labels.get(slot, f"Ability {slot}")
+        slot_cls = SLOT_COLORS.get(slot, "general") if slot > 0 else "general"
+
+        changes_inner = "\n".join(
+            _render_change(c, hero_name=hero_name, show_ability=False) for c in slot_changes
+        )
+
+        html_parts.append(
+            f'<div class="ability-group" data-slot="{slot}">'
+            f'<div class="ability-group-header">'
+            f'<span class="ag-indicator {dir_cls}">{sym}</span>'
+            f'<span class="ag-label ag-slot-{slot_cls}">{_e(label)}</span>'
+            f'<span class="ag-count">{len(slot_changes)}</span>'
+            f'</div>'
+            f'<div class="ability-group-changes">{changes_inner}</div>'
+            f'</div>'
+        )
+
+    return "\n".join(html_parts)
+
+
 def _render_hero_detail(group: HeroChangeGroup) -> str:
     eid = f"hero-{_safe_id(group.hero.name)}"
     rating = group.rating or LLMRating.from_score(3, "")
     badge = _render_rating_badge(rating)
     sorted_changes = _sort_changes(group.changes)
-    changes_html = "\n".join(_render_change(c, hero_name=group.hero.name) for c in sorted_changes)
+    changes_html = _render_grouped_changes(sorted_changes, group.hero.name)
     wiki = _wiki_url(group.hero.name)
     # Count buffs/nerfs
     buffs = sum(1 for c in group.changes if c.direction == ChangeDirection.BUFF)
@@ -394,20 +463,88 @@ def _render_all_details(data: ParsedPatchNotes) -> str:
     return "\n".join(p for p in parts if p)
 
 
-def _render_empty_state(data: ParsedPatchNotes) -> str:
+def _render_overview(data: ParsedPatchNotes) -> str:
+    """Render the patch overview with summary and hero tier list."""
     total_heroes = len(data.hero_changes)
     total_items = len(data.item_changes)
     total_system = len(data.system_changes)
-    return (
-        f'<div class="detail-empty" id="detail-empty">'
-        f'<div class="empty-icon">📋</div>'
-        f'<div class="empty-title">Select a hero or item</div>'
-        f'<div class="empty-subtitle">Choose from the sidebar to view detailed changes</div>'
-        f'<div class="empty-stats">'
-        f'<span>{total_heroes} heroes</span>'
-        f'<span>{total_items} items</span>'
-        f'<span>{total_system} system changes</span>'
+
+    # Summary section
+    summary_text = _e(data.summary) if data.summary else ""
+    summary_html = f'<p class="overview-summary">{summary_text}</p>' if summary_text else ''
+
+    # Stats bar
+    all_changes = list(data.system_changes)
+    for g in data.hero_changes.values():
+        all_changes.extend(g.changes)
+    for g in data.item_changes.values():
+        all_changes.extend(g.changes)
+    total_buffs = sum(1 for c in all_changes if c.direction == ChangeDirection.BUFF)
+    total_nerfs = sum(1 for c in all_changes if c.direction == ChangeDirection.NERF)
+
+    stats_html = (
+        f'<div class="overview-stats">'
+        f'<span class="os-item">{total_heroes} heroes</span>'
+        f'<span class="os-item">{total_items} items</span>'
+        f'<span class="os-item">{total_system} system</span>'
+        f'<span class="os-item os-buff">▲ {total_buffs} buffs</span>'
+        f'<span class="os-item os-nerf">▼ {total_nerfs} nerfs</span>'
         f'</div>'
+    )
+
+    # Hero tier list — group heroes by rating
+    tier_config = [
+        (5, "Big Buff", "tier-5"),
+        (4, "Buff", "tier-4"),
+        (3, "Mixed", "tier-3"),
+        (2, "Nerf", "tier-2"),
+        (1, "Huge Nerf", "tier-1"),
+    ]
+    tier_groups: dict[int, list[HeroChangeGroup]] = {}
+    for g in data.hero_changes.values():
+        r = g.rating.rating if g.rating else 3
+        tier_groups.setdefault(r, []).append(g)
+
+    tier_rows = []
+    for tier_num, tier_label, tier_cls in tier_config:
+        heroes = tier_groups.get(tier_num, [])
+        if not heroes:
+            continue
+        heroes_sorted = sorted(heroes, key=lambda g: g.hero.name.lower())
+        pills = []
+        for g in heroes_sorted:
+            eid = f"hero-{_safe_id(g.hero.name)}"
+            pills.append(
+                f'<button class="tier-hero" data-entity-id="{eid}" '
+                f'onclick="selectEntity(\'{eid}\')">'
+                f'<span class="tier-hero-portrait" data-name="{_e(g.hero.name)}"></span>'
+                f'<span class="tier-hero-name">{_e(g.hero.name)}</span>'
+                f'</button>'
+            )
+        tier_rows.append(
+            f'<div class="tier-row">'
+            f'<div class="tier-label {tier_cls}">{_e(tier_label)}</div>'
+            f'<div class="tier-heroes">{"".join(pills)}</div>'
+            f'</div>'
+        )
+
+    tier_html = ""
+    if tier_rows:
+        tier_html = (
+            f'<div class="tier-list">'
+            f'<h3 class="tier-list-title">Hero Tier List</h3>'
+            f'{"".join(tier_rows)}'
+            f'</div>'
+        )
+
+    return (
+        f'<div class="detail-overview" id="detail-empty">'
+        f'<div class="overview-header">'
+        f'<h2 class="overview-title">Patch Overview</h2>'
+        f'{stats_html}'
+        f'</div>'
+        f'{summary_html}'
+        f'{tier_html}'
         f'</div>'
     )
 
@@ -452,7 +589,7 @@ def _render_date_filter(dates: list[str]) -> str:
 def render(data: ParsedPatchNotes) -> str:
     sidebar_html = _render_sidebar(data)
     details_html = _render_all_details(data)
-    empty_html = _render_empty_state(data)
+    empty_html = _render_overview(data)
     title = _e(data.title) if data.title else "Deadlock Patch Notes"
     summary_html = f'<p class="patch-summary">{_e(data.summary)}</p>' if data.summary else ''
 
@@ -552,7 +689,7 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
   .detail-panel::-webkit-scrollbar-thumb:hover {{ background:var(--border-hover); }}
 
   .detail-section {{ padding:28px 32px; }}
-  .detail-section.entering {{ animation:detailIn 0.2s ease both; }}
+  .detail-section.entering, .detail-overview.entering {{ animation:detailIn 0.2s ease both; }}
   @keyframes detailIn {{ from {{ opacity:0; transform:translateY(10px); }} to {{ opacity:1; transform:translateY(0); }} }}
 
   .detail-header {{ display:flex; align-items:center; gap:20px; margin-bottom:24px; padding-bottom:20px; border-bottom:1px solid var(--border); }}
@@ -605,6 +742,19 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
   .wiki-link {{ display:inline-block; margin-top:12px; font-family:'JetBrains Mono',monospace; font-size:11px; letter-spacing:0.5px; color:var(--text-dim); background:#ffffff08; border:1px solid var(--border); padding:5px 12px; border-radius:5px; text-decoration:none; transition:all 0.2s; }}
   .wiki-link:hover {{ color:var(--accent-orange); border-color:var(--accent-orange); background:var(--accent-orange-dim); }}
 
+  /* ── Ability groups ── */
+  .ability-group {{ margin-bottom:12px; }}
+  .ability-group-header {{ display:flex; align-items:center; gap:8px; padding:6px 12px; border-radius:6px 6px 0 0; border-bottom:1px solid var(--border); }}
+  .ag-indicator {{ font-size:14px; flex-shrink:0; width:16px; text-align:center; }}
+  .ag-label {{ font-family:'Rajdhani',sans-serif; font-size:14px; font-weight:700; letter-spacing:0.5px; text-transform:uppercase; }}
+  .ag-slot-general {{ color:var(--ability-general); }}
+  .ag-slot-1 {{ color:var(--ability-1); }}
+  .ag-slot-2 {{ color:var(--ability-2); }}
+  .ag-slot-3 {{ color:var(--ability-3); }}
+  .ag-slot-4 {{ color:var(--ability-4); }}
+  .ag-count {{ font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--text-dim); background:var(--bg-card); padding:2px 6px; border-radius:4px; margin-left:auto; }}
+  .ability-group-changes {{ padding-left:0; }}
+
   /* ── Day tabs ── */
   .day-tabs {{ display:flex; gap:6px; margin-bottom:16px; flex-wrap:wrap; }}
   .day-tab {{ font-family:'JetBrains Mono',monospace; font-size:12px; padding:6px 14px; border-radius:6px; border:1px solid var(--border); background:var(--bg-card); color:var(--text-secondary); cursor:pointer; transition:all 0.15s; display:inline-flex; align-items:center; gap:6px; }}
@@ -620,13 +770,32 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
   .ability-icon {{ width:18px; height:18px; border-radius:4px; object-fit:contain; vertical-align:middle; margin-right:2px; opacity:0; transition:opacity 0.3s; flex-shrink:0; margin-top:1px; }}
   .ability-icon.loaded {{ opacity:1; }}
 
-  /* ── Empty state ── */
-  .detail-empty {{ display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; color:var(--text-dim); text-align:center; padding:40px; }}
-  .empty-icon {{ font-size:48px; margin-bottom:16px; opacity:0.5; }}
-  .empty-title {{ font-family:'Rajdhani',sans-serif; font-size:24px; font-weight:700; color:var(--text-secondary); letter-spacing:1px; }}
-  .empty-subtitle {{ font-size:14px; margin-top:6px; }}
-  .empty-stats {{ display:flex; gap:20px; margin-top:24px; font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--text-dim); }}
-  .empty-stats span {{ background:var(--bg-card); padding:6px 14px; border-radius:6px; border:1px solid var(--border); }}
+  /* ── Patch overview ── */
+  .detail-overview {{ padding:28px 32px; }}
+  .overview-header {{ margin-bottom:24px; padding-bottom:20px; border-bottom:1px solid var(--border); }}
+  .overview-title {{ font-family:'Rajdhani',sans-serif; font-size:clamp(28px,4vw,36px); font-weight:700; letter-spacing:2px; text-transform:uppercase; color:var(--text-primary); margin-bottom:12px; }}
+  .overview-stats {{ display:flex; flex-wrap:wrap; gap:10px; }}
+  .os-item {{ font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--text-dim); background:var(--bg-card); padding:6px 14px; border-radius:6px; border:1px solid var(--border); }}
+  .os-buff {{ color:var(--ability-2); border-color:#5dff7e25; }}
+  .os-nerf {{ color:#ff5c5c; border-color:#ff5c5c25; }}
+  .overview-summary {{ font-size:15px; line-height:1.7; color:var(--text-secondary); margin-bottom:28px; padding:16px 18px; background:#ffffff06; border-left:3px solid var(--accent-orange); border-radius:0 8px 8px 0; }}
+
+  /* ── Tier list ── */
+  .tier-list {{ margin-top:8px; }}
+  .tier-list-title {{ font-family:'Rajdhani',sans-serif; font-size:20px; font-weight:700; letter-spacing:1px; text-transform:uppercase; color:var(--text-secondary); margin-bottom:16px; }}
+  .tier-row {{ display:flex; align-items:stretch; margin-bottom:6px; border-radius:8px; overflow:hidden; border:1px solid var(--border); background:var(--bg-card); }}
+  .tier-label {{ width:100px; flex-shrink:0; display:flex; align-items:center; justify-content:center; font-family:'JetBrains Mono',monospace; font-size:12px; font-weight:700; letter-spacing:1px; text-transform:uppercase; padding:10px 8px; }}
+  .tier-label.tier-5 {{ background:#3ecfff15; color:var(--rating-5); border-right:2px solid var(--rating-5); }}
+  .tier-label.tier-4 {{ background:#5dff7e15; color:var(--rating-4); border-right:2px solid var(--rating-4); }}
+  .tier-label.tier-3 {{ background:#a0a5b815; color:var(--rating-3); border-right:2px solid var(--rating-3); }}
+  .tier-label.tier-2 {{ background:#ff8c4215; color:var(--rating-2); border-right:2px solid var(--rating-2); }}
+  .tier-label.tier-1 {{ background:#ff3b3b15; color:var(--rating-1); border-right:2px solid var(--rating-1); }}
+  .tier-heroes {{ display:flex; flex-wrap:wrap; gap:6px; padding:8px 12px; align-items:center; flex:1; }}
+  .tier-hero {{ display:flex; align-items:center; gap:6px; padding:4px 10px 4px 4px; border-radius:6px; border:1px solid var(--border); background:var(--bg-deep); cursor:pointer; transition:all 0.15s; font-family:'Chakra Petch',sans-serif; font-size:13px; color:var(--text-primary); }}
+  .tier-hero:hover {{ border-color:var(--accent-orange); background:var(--accent-orange-dim); }}
+  .tier-hero-portrait {{ width:28px; height:28px; border-radius:5px; background:var(--bg-card); overflow:hidden; flex-shrink:0; display:flex; align-items:center; justify-content:center; }}
+  .tier-hero-portrait img {{ width:100%; height:100%; object-fit:cover; }}
+  .tier-hero-name {{ white-space:nowrap; }}
 
   /* ── Ability popup ── */
   .ability-popup {{ position:fixed; z-index:9999; width:min(380px, calc(100vw - 32px)); border:1px solid #583D6F; border-radius:12px; overflow:hidden; box-shadow:0 8px 32px rgba(0,0,0,0.7); pointer-events:none; opacity:0; transition:opacity 0.2s; background:#121013; font-family:'Chakra Petch',sans-serif; color:#FFEFD7; }}
@@ -739,13 +908,34 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
     // Deselect sidebar
     document.querySelectorAll('.sidebar-item.active').forEach(el => el.classList.remove('active'));
 
-    // Hide all detail sections
+    // Hide all detail sections and overview
     document.querySelectorAll('.detail-section').forEach(el => {{
       el.style.display = 'none';
       el.classList.remove('entering');
     }});
-    const emptyEl = document.getElementById('detail-empty');
-    if (emptyEl) emptyEl.style.display = 'none';
+    const overviewEl = document.getElementById('detail-empty');
+    if (overviewEl) overviewEl.style.display = 'none';
+
+    // Handle overview selection
+    if (id === 'overview') {{
+      if (overviewEl) {{
+        overviewEl.style.display = '';
+        if (!skipAnimation) {{
+          overviewEl.classList.add('entering');
+          overviewEl.addEventListener('animationend', function handler() {{
+            overviewEl.classList.remove('entering');
+            overviewEl.removeEventListener('animationend', handler);
+          }});
+        }}
+      }}
+      const item = document.querySelector('.sidebar-item[data-entity-id="overview"]');
+      if (item) item.classList.add('active');
+      currentEntity = id;
+      closeSidebar();
+      document.querySelector('.detail-panel').scrollTop = 0;
+      history.replaceState(null, '', '#overview');
+      return;
+    }}
 
     // Show new detail with enter animation
     const newDetail = document.getElementById('detail-' + id);
@@ -982,8 +1172,8 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
       }});
     }});
 
-    // Sidebar hero portraits
-    document.querySelectorAll('.sidebar-item[data-entity-type="hero"] .si-portrait').forEach(el => {{
+    // Sidebar hero portraits + tier list portraits
+    document.querySelectorAll('.sidebar-item[data-entity-type="hero"] .si-portrait, .tier-hero-portrait').forEach(el => {{
       const name = el.dataset.name;
       if (!name) return;
       const an = HERO_ALIASES[name] || name;
@@ -1279,15 +1469,13 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
     }});
   }})();
 
-  /* ── Init: select from URL hash or first entity ── */
+  /* ── Init: select from URL hash or show overview ── */
   (function() {{
     const hash = location.hash.slice(1);
     if (hash && document.getElementById('detail-' + hash)) {{
       selectEntity(hash, true);
-    }} else {{
-      const first = document.querySelector('.sidebar-item');
-      if (first) selectEntity(first.dataset.entityId, true);
     }}
+    // Otherwise, the overview is already visible (no entity pre-selected)
   }})();
 </script>
 </body>
