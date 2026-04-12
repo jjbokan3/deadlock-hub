@@ -58,6 +58,9 @@ logger = logging.getLogger("watcher")
 CHANGELOG_RSS = "https://forums.playdeadlock.com/forums/changelog.10/index.rss"
 SEEN_FILE = ".cache/seen_patches.json"
 DEFAULT_OUTPUT_DIR = "./site/deadlock/updates"
+NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "deadlock-patch-1e9559743277")
+NTFY_URL = os.environ.get("NTFY_URL", "https://ntfy.sh")
+SITE_BASE_URL = "https://games.josephbokan.io/deadlock/updates"
 
 
 def fetch_rss(url: str = CHANGELOG_RSS) -> list[dict]:
@@ -159,6 +162,30 @@ def _content_hash(text: str) -> str:
     return hashlib.md5(text.encode()).hexdigest()
 
 
+def _notify(title: str, message: str, url: str = "", updated: bool = False):
+    """Send a push notification via ntfy.sh."""
+    if not NTFY_TOPIC:
+        return
+    try:
+        headers = {
+            "Title": title,
+            "Priority": "4" if not updated else "3",
+            "Tags": "video_game,deadlock",
+        }
+        if url:
+            headers["Click"] = url
+            headers["Actions"] = f"view, Open Patch Notes, {url}"
+        requests.post(
+            f"{NTFY_URL}/{NTFY_TOPIC}",
+            data=message.encode("utf-8"),
+            headers=headers,
+            timeout=10,
+        )
+        logger.info(f"Notification sent: {title}")
+    except Exception as e:
+        logger.warning(f"Failed to send notification: {e}")
+
+
 def check_and_process(output_dir: str, llm: str, extra_args: list[str], max_new: int = 0) -> int:
     """Check RSS for new or updated patches and process them. Returns count processed.
 
@@ -211,6 +238,17 @@ def check_and_process(output_dir: str, llm: str, extra_args: list[str], max_new:
 
         result = run_pipeline(patch_text, entry["title"], output_dir, llm, extra_args)
 
+        if result:
+            # Build URL from output filename
+            fname = os.path.basename(result)
+            page_url = f"{SITE_BASE_URL}/{fname}"
+            line_count = len(patch_text.strip().splitlines())
+            _notify(
+                f"New Patch: {entry['title']}",
+                f"{line_count} lines of patch notes processed and published.",
+                url=page_url,
+            )
+
         seen[entry["id"]] = _content_hash(patch_text)
         save_seen(seen)
         new_count += 1
@@ -250,6 +288,16 @@ def check_and_process(output_dir: str, llm: str, extra_args: list[str], max_new:
         logger.info(f"  Now {line_count} lines (was different)")
 
         result = run_pipeline(patch_text, entry["title"], output_dir, llm, extra_args)
+
+        if result:
+            fname = os.path.basename(result)
+            page_url = f"{SITE_BASE_URL}/{fname}"
+            _notify(
+                f"Updated: {entry['title']}",
+                f"Follow-up post detected. Page regenerated with {line_count} lines.",
+                url=page_url,
+                updated=True,
+            )
 
         seen[entry["id"]] = new_hash
         save_seen(seen)
