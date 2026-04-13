@@ -61,6 +61,7 @@ DEFAULT_OUTPUT_DIR = "./site/deadlock/updates"
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "deadlock-patch-1e9559743277")
 NTFY_URL = os.environ.get("NTFY_URL", "https://ntfy.sh")
 SITE_BASE_URL = "https://games.josephbokan.io/deadlock/updates"
+NOTIFICATIONS_ENABLED = True  # Set to False via --no-notify
 
 
 def fetch_rss(url: str = CHANGELOG_RSS) -> list[dict]:
@@ -164,6 +165,9 @@ def _content_hash(text: str) -> str:
 
 def _notify(title: str, message: str, url: str = "", updated: bool = False):
     """Send a push notification via ntfy.sh."""
+    if not NOTIFICATIONS_ENABLED:
+        logger.info(f"Notification suppressed (--no-notify): {title}")
+        return
     if not NTFY_TOPIC:
         return
     try:
@@ -351,8 +355,18 @@ def main():
         default=CHANGELOG_RSS,
         help="RSS feed URL to watch",
     )
+    parser.add_argument(
+        "--no-notify",
+        action="store_true",
+        help="Suppress push notifications (for dashboard/debug use)",
+    )
 
     args, extra = parser.parse_known_args()
+
+    global NOTIFICATIONS_ENABLED
+    if args.no_notify:
+        NOTIFICATIONS_ENABLED = False
+        logger.info("Notifications disabled (--no-notify)")
 
     CHANGELOG_RSS = args.rss_url
 
