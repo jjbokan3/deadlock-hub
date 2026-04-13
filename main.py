@@ -358,6 +358,12 @@ def main():
     parsed.summary = provider.summarize_patch(parsed)
     console.print(f"[dim]Summary: {parsed.summary}[/dim]")
 
+    # ── Top 10 most impactful changes ─────────────────────────────
+    logger.info("Ranking top 10 most impactful changes...")
+    parsed.top_impacts = provider.rank_top_impacts(parsed)
+    if parsed.top_impacts:
+        console.print(f"[dim]Top impacts: {len(parsed.top_impacts)} entries ranked[/dim]")
+
     # ── Render HTML ──────────────────────────────────────────────
     logger.info("Rendering HTML...")
     html = render(parsed)

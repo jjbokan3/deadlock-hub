@@ -5,7 +5,7 @@ import json
 import re
 from models import (
     ParsedPatchNotes, HeroChangeGroup, ItemChangeGroup,
-    Change, ChangeDirection, ItemCategory, LLMRating,
+    Change, ChangeDirection, ItemCategory, LLMRating, ImpactEntry,
 )
 
 # ── Mapping helpers ──────────────────────────────────────────────
@@ -463,6 +463,67 @@ def _render_all_details(data: ParsedPatchNotes) -> str:
     return "\n".join(p for p in parts if p)
 
 
+def _render_top_impacts(data: ParsedPatchNotes) -> str:
+    """Render the top 10 most impactful changes section."""
+    if not data.top_impacts:
+        return ""
+
+    rows = []
+    for entry in data.top_impacts:
+        sym, dir_cls = DIRECTION_SYMBOLS.get(entry.direction, ("●", "neutral"))
+
+        # Build the label: entity name + ability if applicable
+        if entry.ability_name:
+            label = f'{_e(entry.entity_name)} — {_e(entry.ability_name)}'
+        else:
+            label = _e(entry.entity_name)
+
+        type_badge = f'<span class="impact-type impact-type-{entry.entity_type}">{entry.entity_type.title()}</span>'
+
+        # Entity ID for clickthrough
+        if entry.entity_type == "hero":
+            eid = f"hero-{_safe_id(entry.entity_name)}"
+        else:
+            eid = f"item-{_safe_id(entry.entity_name)}"
+
+        # Render the individual changes collapsed
+        changes_html = ""
+        if entry.changes:
+            change_lines = []
+            for c in entry.changes[:6]:  # Show max 6
+                c_sym, c_cls = DIRECTION_SYMBOLS.get(c.direction, ("●", "neutral"))
+                change_lines.append(
+                    f'<div class="impact-change"><span class="change-direction {c_cls}">{c_sym}</span>{_e(c.text)}</div>'
+                )
+            if len(entry.changes) > 6:
+                change_lines.append(f'<div class="impact-change impact-more">+{len(entry.changes) - 6} more</div>')
+            changes_html = f'<div class="impact-changes">{"".join(change_lines)}</div>'
+
+        rows.append(
+            f'<div class="impact-row" onclick="selectEntity(\'{eid}\')">'
+            f'<div class="impact-rank">#{entry.rank}</div>'
+            f'<div class="impact-portrait" data-name="{_e(entry.entity_name)}" '
+            f'data-entity-type="{entry.entity_type}"></div>'
+            f'<div class="impact-body">'
+            f'<div class="impact-header">'
+            f'<span class="impact-direction {dir_cls}">{sym}</span>'
+            f'<span class="impact-label">{label}</span>'
+            f'{type_badge}'
+            f'</div>'
+            f'<div class="impact-explanation">{_e(entry.explanation)}</div>'
+            f'{changes_html}'
+            f'</div>'
+            f'</div>'
+        )
+
+    return (
+        f'<div class="top-impacts">'
+        f'<h3 class="top-impacts-title">Top 10 Most Impactful Changes</h3>'
+        f'{"".join(rows)}'
+        f'</div>'
+    )
+
+
 def _render_overview(data: ParsedPatchNotes) -> str:
     """Render the patch overview with summary and hero tier list."""
     total_heroes = len(data.hero_changes)
@@ -537,6 +598,9 @@ def _render_overview(data: ParsedPatchNotes) -> str:
             f'</div>'
         )
 
+    # Top 10 most impactful changes
+    impacts_html = _render_top_impacts(data)
+
     return (
         f'<div class="detail-overview" id="detail-empty">'
         f'<div class="overview-header">'
@@ -544,6 +608,7 @@ def _render_overview(data: ParsedPatchNotes) -> str:
         f'{stats_html}'
         f'</div>'
         f'{summary_html}'
+        f'{impacts_html}'
         f'{tier_html}'
         f'</div>'
     )
@@ -796,6 +861,30 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
   .tier-hero-portrait {{ width:28px; height:28px; border-radius:5px; background:var(--bg-card); overflow:hidden; flex-shrink:0; display:flex; align-items:center; justify-content:center; }}
   .tier-hero-portrait img {{ width:100%; height:100%; object-fit:cover; }}
   .tier-hero-name {{ white-space:nowrap; }}
+
+  /* ── Top impacts ── */
+  .top-impacts {{ margin-bottom:28px; }}
+  .top-impacts-title {{ font-family:'Rajdhani',sans-serif; font-size:20px; font-weight:700; letter-spacing:1px; text-transform:uppercase; color:var(--text-secondary); margin-bottom:16px; }}
+  .impact-row {{ display:flex; align-items:flex-start; gap:14px; padding:14px 16px; border-radius:10px; border:1px solid var(--border); background:var(--bg-card); margin-bottom:8px; cursor:pointer; transition:all 0.15s; }}
+  .impact-row:hover {{ border-color:var(--accent-orange); background:var(--bg-card-hover); transform:translateX(2px); }}
+  .impact-rank {{ font-family:'Rajdhani',sans-serif; font-size:22px; font-weight:700; color:var(--accent-orange); min-width:36px; text-align:center; line-height:1; padding-top:2px; }}
+  .impact-portrait {{ width:40px; height:40px; border-radius:8px; background:var(--bg-deep); overflow:hidden; flex-shrink:0; display:flex; align-items:center; justify-content:center; border:1px solid var(--border); }}
+  .impact-portrait img {{ width:100%; height:100%; object-fit:cover; }}
+  .impact-body {{ flex:1; min-width:0; }}
+  .impact-header {{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:4px; }}
+  .impact-direction {{ font-size:14px; font-weight:700; }}
+  .impact-direction.buff {{ color:var(--rating-4); }}
+  .impact-direction.nerf {{ color:var(--rating-1); }}
+  .impact-direction.neutral {{ color:var(--rating-3); }}
+  .impact-label {{ font-family:'Rajdhani',sans-serif; font-size:16px; font-weight:600; color:var(--text-primary); letter-spacing:0.5px; }}
+  .impact-type {{ font-family:'JetBrains Mono',monospace; font-size:10px; padding:2px 8px; border-radius:4px; text-transform:uppercase; letter-spacing:1px; }}
+  .impact-type-hero {{ background:#3ecfff15; color:var(--ability-1); border:1px solid #3ecfff25; }}
+  .impact-type-item {{ background:#ffcf3e15; color:var(--ability-4); border:1px solid #ffcf3e25; }}
+  .impact-explanation {{ font-size:13px; line-height:1.5; color:var(--text-secondary); }}
+  .impact-changes {{ margin-top:8px; padding-top:8px; border-top:1px solid var(--border); display:flex; flex-direction:column; gap:3px; }}
+  .impact-change {{ font-size:12px; color:var(--text-dim); display:flex; align-items:center; gap:6px; }}
+  .impact-change .change-direction {{ font-size:10px; }}
+  .impact-more {{ color:var(--text-dim); font-style:italic; padding-left:16px; }}
 
   /* ── Ability popup ── */
   .ability-popup {{ position:fixed; z-index:9999; width:min(380px, calc(100vw - 32px)); border:1px solid #583D6F; border-radius:12px; overflow:hidden; box-shadow:0 8px 32px rgba(0,0,0,0.7); pointer-events:none; opacity:0; transition:opacity 0.2s; background:#121013; font-family:'Chakra Petch',sans-serif; color:#FFEFD7; }}
@@ -1172,8 +1261,8 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
       }});
     }});
 
-    // Sidebar hero portraits + tier list portraits
-    document.querySelectorAll('.sidebar-item[data-entity-type="hero"] .si-portrait, .tier-hero-portrait').forEach(el => {{
+    // Sidebar hero portraits + tier list portraits + impact portraits
+    document.querySelectorAll('.sidebar-item[data-entity-type="hero"] .si-portrait, .tier-hero-portrait, .impact-portrait[data-entity-type="hero"]').forEach(el => {{
       const name = el.dataset.name;
       if (!name) return;
       const an = HERO_ALIASES[name] || name;
@@ -1183,8 +1272,8 @@ PAGE_TEMPLATE = '''<!DOCTYPE html>
       if (url) el.appendChild(createImg(url, 'loaded'));
     }});
 
-    // Sidebar item icons
-    document.querySelectorAll('.sidebar-item[data-entity-type="item"] .si-portrait').forEach(el => {{
+    // Sidebar item icons + impact item portraits
+    document.querySelectorAll('.sidebar-item[data-entity-type="item"] .si-portrait, .impact-portrait[data-entity-type="item"]').forEach(el => {{
       const name = el.dataset.name;
       if (!name) return;
       const i = im[name.toLowerCase()];

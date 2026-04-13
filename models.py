@@ -119,9 +119,23 @@ class ItemChangeGroup:
 
 
 @dataclass
+class ImpactEntry:
+    """A single entry in the top-10 most impactful changes list."""
+    rank: int
+    entity_name: str  # hero or item name
+    entity_type: str  # "hero" or "item"
+    ability_name: str = ""  # specific ability, if applicable
+    ability_slot: int = 0
+    explanation: str = ""
+    direction: ChangeDirection = ChangeDirection.NEUTRAL
+    changes: list[Change] = field(default_factory=list)
+
+
+@dataclass
 class ParsedPatchNotes:
     system_changes: list[Change] = field(default_factory=list)
     item_changes: dict[str, ItemChangeGroup] = field(default_factory=dict)
     hero_changes: dict[str, HeroChangeGroup] = field(default_factory=dict)
     title: str = ""
     summary: str = ""
+    top_impacts: list[ImpactEntry] = field(default_factory=list)

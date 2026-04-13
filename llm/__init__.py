@@ -273,6 +273,34 @@ class LLMProvider(ABC):
             return LLMRating.from_score(3, f"LLM error: {e}")
 
 
+    def rank_top_impacts(self, data) -> list:
+        """Identify the top 10 most impactful changes in the patch."""
+        from models import ParsedPatchNotes
+        parsed: ParsedPatchNotes = data
+
+        changes_summary = _build_changes_summary(parsed)
+        hero_ratings = ", ".join(
+            f"{name}: {g.rating.rating} ({g.rating.label})"
+            for name, g in sorted(parsed.hero_changes.items()) if g.rating
+        )
+        item_ratings = ", ".join(
+            f"{name}: {g.rating.rating} ({g.rating.label})"
+            for name, g in sorted(parsed.item_changes.items()) if g.rating
+        )
+
+        prompt = TOP_IMPACTS_PROMPT.format(
+            changes_summary=changes_summary,
+            hero_ratings=hero_ratings or "None",
+            item_ratings=item_ratings or "None",
+        )
+
+        try:
+            raw = self._guarded_complete(prompt, system="You are a Deadlock balance analyst. Respond only with valid JSON.")
+            return _parse_top_impacts(raw, parsed)
+        except Exception as e:
+            logger.warning(f"Top impacts ranking failed: {e}, falling back to heuristic")
+            return _heuristic_top_impacts(parsed)
+
     def summarize_patch(self, data) -> str:
         """Generate a 1-2 sentence summary of the overall patch."""
         from models import ParsedPatchNotes, ChangeDirection
@@ -318,6 +346,244 @@ class LLMProvider(ABC):
         except Exception as e:
             logger.warning(f"Summary generation failed: {e}")
             return _heuristic_summary(parsed)
+
+
+TOP_IMPACTS_PROMPT = """You are analyzing a Deadlock patch to identify the TOP 10 MOST IMPACTFUL changes.
+
+Below is every change in the patch, grouped by entity and ability. Your job is to rank the 10 most
+impactful change groups. A "change group" is all changes to a single ability or all base stat changes
+for a single hero/item. If a hero's Ability 2 got 3 separate buffs, that counts as ONE entry (the ability).
+
+{changes_summary}
+
+Overall hero ratings (for context):
+{hero_ratings}
+
+Overall item ratings (for context):
+{item_ratings}
+
+Respond with JSON ONLY. No markdown fences.
+{{
+  "impacts": [
+    {{
+      "rank": 1,
+      "entity_name": "<exact hero or item name>",
+      "entity_type": "<hero or item>",
+      "ability_name": "<ability name or empty string if base stats/whole item>",
+      "ability_slot": <0 for base/item, 1-4 for abilities>,
+      "direction": "<buff or nerf or neutral>",
+      "explanation": "<1-2 sentences on WHY this is impactful. Be specific about gameplay consequences.>"
+    }},
+    ...10 entries total
+  ]
+}}
+
+RANKING CRITERIA (in order of importance):
+1. Spirit scaling changes compound all game — even small % changes are huge
+2. Signature ability reworks/major changes define a hero's viability
+3. Ultimate changes carry outsized weight (long cooldowns = each cast matters more)
+4. Item changes that affect multiple heroes (widely-bought items) ripple across the meta
+5. Movement speed changes create/remove options that raw stats can't compensate for
+6. Multiple buffs/nerfs stacking on one ability = compounding effect
+7. Changes that force build path adjustments (re-itemization cost)
+
+DO NOT just list the heroes with the highest/lowest ratings. Focus on SPECIFIC abilities or item
+changes that will actually shift how the game is played. An ability getting +30% spirit scaling
+is more impactful than a hero getting 3 minor base stat buffs even if the latter has more changes."""
+
+
+def _build_changes_summary(data) -> str:
+    """Build a grouped summary of all changes for the top impacts prompt."""
+    from models import ParsedPatchNotes
+    parsed: ParsedPatchNotes = data
+    lines = []
+
+    for name, group in sorted(parsed.hero_changes.items()):
+        lines.append(f"\n## {name} (Hero)")
+        # Group by ability slot
+        by_slot: dict[int, list] = {}
+        for c in group.changes:
+            if c.street_brawl:
+                continue
+            slot = c.ability_slot or 0
+            by_slot.setdefault(slot, []).append(c)
+        for slot in sorted(by_slot.keys()):
+            changes = by_slot[slot]
+            ability_name = ""
+            for c in changes:
+                if c.ability_name:
+                    ability_name = c.ability_name
+                    break
+            label = ability_name or ("Base Stats" if slot == 0 else f"Ability {slot}")
+            dirs = [c.direction.value for c in changes]
+            lines.append(f"  [{label}] ({len(changes)} changes: {', '.join(dirs)})")
+            for c in changes:
+                val_info = f" [{c.old_value} → {c.new_value}]" if c.old_value and c.new_value else ""
+                lines.append(f"    - {c.text}{val_info}")
+
+    for name, group in sorted(parsed.item_changes.items()):
+        lines.append(f"\n## {name} (Item)")
+        for c in group.changes:
+            if c.street_brawl:
+                continue
+            val_info = f" [{c.old_value} → {c.new_value}]" if c.old_value and c.new_value else ""
+            lines.append(f"  - [{c.direction.value}] {c.text}{val_info}")
+
+    return "\n".join(lines)
+
+
+def _parse_top_impacts(raw: str, data) -> list:
+    """Parse the JSON response for top impacts into ImpactEntry list."""
+    from models import ImpactEntry, ChangeDirection, ParsedPatchNotes
+    parsed: ParsedPatchNotes = data
+
+    cleaned = raw.strip()
+    if cleaned.startswith("```"):
+        cleaned = "\n".join(cleaned.split("\n")[1:])
+    if cleaned.endswith("```"):
+        cleaned = "\n".join(cleaned.split("\n")[:-1])
+    cleaned = cleaned.strip()
+
+    try:
+        result = json.loads(cleaned)
+    except json.JSONDecodeError:
+        logger.warning(f"Failed to parse top impacts JSON: {cleaned[:200]}")
+        return []
+
+    impacts_data = result.get("impacts", [])
+    entries = []
+    direction_map = {"buff": ChangeDirection.BUFF, "nerf": ChangeDirection.NERF, "neutral": ChangeDirection.NEUTRAL}
+
+    for item in impacts_data[:10]:
+        entity_name = item.get("entity_name", "")
+        entity_type = item.get("entity_type", "")
+        ability_slot = int(item.get("ability_slot", 0))
+        direction = direction_map.get(item.get("direction", "neutral"), ChangeDirection.NEUTRAL)
+
+        # Find matching changes from parsed data
+        changes = []
+        if entity_type == "hero" and entity_name in parsed.hero_changes:
+            group = parsed.hero_changes[entity_name]
+            for c in group.changes:
+                if c.street_brawl:
+                    continue
+                c_slot = c.ability_slot or 0
+                if c_slot == ability_slot:
+                    changes.append(c)
+        elif entity_type == "item" and entity_name in parsed.item_changes:
+            changes = [c for c in parsed.item_changes[entity_name].changes if not c.street_brawl]
+
+        entries.append(ImpactEntry(
+            rank=int(item.get("rank", len(entries) + 1)),
+            entity_name=entity_name,
+            entity_type=entity_type,
+            ability_name=item.get("ability_name", ""),
+            ability_slot=ability_slot,
+            explanation=item.get("explanation", ""),
+            direction=direction,
+            changes=changes,
+        ))
+
+    return entries
+
+
+def _heuristic_top_impacts(data) -> list:
+    """Generate top impacts without LLM using rating data."""
+    from models import ImpactEntry, ChangeDirection, ParsedPatchNotes
+    parsed: ParsedPatchNotes = data
+
+    # Score each hero ability group and item by change count * direction extremity
+    candidates = []
+
+    for name, group in parsed.hero_changes.items():
+        if not group.rating:
+            continue
+        # Group by ability slot
+        by_slot: dict[int, list] = {}
+        for c in group.changes:
+            if c.street_brawl:
+                continue
+            slot = c.ability_slot or 0
+            by_slot.setdefault(slot, []).append(c)
+
+        for slot, changes in by_slot.items():
+            buffs = sum(1 for c in changes if c.direction == ChangeDirection.BUFF)
+            nerfs = sum(1 for c in changes if c.direction == ChangeDirection.NERF)
+            # Score: more changes + more extreme direction = higher impact
+            dir_score = abs(buffs - nerfs)
+            total = len(changes)
+            # Weight by overall hero rating extremity (distance from 3)
+            hero_extremity = abs(group.rating.rating - 3)
+            score = (total * 2) + (dir_score * 3) + (hero_extremity * 2)
+            # Boost ultimates
+            if slot == 4:
+                score += 3
+
+            ability_name = ""
+            for c in changes:
+                if c.ability_name:
+                    ability_name = c.ability_name
+                    break
+
+            if buffs > nerfs:
+                direction = ChangeDirection.BUFF
+            elif nerfs > buffs:
+                direction = ChangeDirection.NERF
+            else:
+                direction = ChangeDirection.NEUTRAL
+
+            label = ability_name or ("Base Stats" if slot == 0 else f"Ability {slot}")
+            explanation = f"{total} change(s) to {label} — {buffs} buff(s), {nerfs} nerf(s)."
+
+            candidates.append((score, ImpactEntry(
+                rank=0,
+                entity_name=name,
+                entity_type="hero",
+                ability_name=ability_name,
+                ability_slot=slot,
+                explanation=explanation,
+                direction=direction,
+                changes=changes,
+            )))
+
+    for name, group in parsed.item_changes.items():
+        if not group.rating:
+            continue
+        changes = [c for c in group.changes if not c.street_brawl]
+        if not changes:
+            continue
+        buffs = sum(1 for c in changes if c.direction == ChangeDirection.BUFF)
+        nerfs = sum(1 for c in changes if c.direction == ChangeDirection.NERF)
+        dir_score = abs(buffs - nerfs)
+        total = len(changes)
+        item_extremity = abs(group.rating.rating - 3)
+        score = (total * 2) + (dir_score * 3) + (item_extremity * 3)
+
+        if buffs > nerfs:
+            direction = ChangeDirection.BUFF
+        elif nerfs > buffs:
+            direction = ChangeDirection.NERF
+        else:
+            direction = ChangeDirection.NEUTRAL
+
+        explanation = f"{total} change(s) — {buffs} buff(s), {nerfs} nerf(s)."
+        candidates.append((score, ImpactEntry(
+            rank=0,
+            entity_name=name,
+            entity_type="item",
+            explanation=explanation,
+            direction=direction,
+            changes=changes,
+        )))
+
+    # Sort by score descending, take top 10
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    entries = []
+    for i, (_, entry) in enumerate(candidates[:10]):
+        entry.rank = i + 1
+        entries.append(entry)
+
+    return entries
 
 
 def _heuristic_summary(data) -> str:
@@ -430,6 +696,9 @@ class HeuristicProvider(LLMProvider):
             score,
             f"{label}. {' and '.join(parts)} across {len(changes)} change(s)."
         )
+
+    def rank_top_impacts(self, data) -> list:
+        return _heuristic_top_impacts(data)
 
     def summarize_patch(self, data) -> str:
         return _heuristic_summary(data)
