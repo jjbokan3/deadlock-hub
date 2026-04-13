@@ -128,13 +128,15 @@ def _clear_generated() -> str:
     return f"Cleared {count} files and regenerated index"
 
 
-def _manual_poll(llm: str = "heuristic") -> str:
+def _manual_poll(llm: str = "heuristic", silent: bool = False) -> str:
     """Run watcher.py --once and return output."""
     cmd = [
         sys.executable, os.path.join(PROJECT_DIR, "watcher.py"),
         "--once", "--llm", llm,
         "--output-dir", UPDATES_DIR,
     ]
+    if silent:
+        cmd.append("--no-notify")
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=1200,
@@ -181,12 +183,12 @@ def _deploy() -> str:
         return f"Deploy error: {e}"
 
 
-def _regenerate() -> str:
+def _regenerate(silent: bool = False) -> str:
     """Clear seen cache and regenerate all patch pages."""
     seen = os.path.join(CACHE_DIR, "seen_patches.json")
     if os.path.exists(seen):
         os.remove(seen)
-    return _manual_poll("heuristic")
+    return _manual_poll("heuristic", silent=silent)
 
 
 def _git_info() -> dict:
@@ -277,7 +279,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         if path == "/api/poll":
             llm = params.get("llm", ["heuristic"])[0]
-            result = _manual_poll(llm)
+            silent = params.get("silent", ["0"])[0] == "1"
+            result = _manual_poll(llm, silent=silent)
             self._send_json({"success": True, "output": result})
         elif path == "/api/cache/clear":
             self._send_json({"success": True, "message": _clear_api_cache()})
@@ -291,7 +294,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         elif path == "/api/deploy":
             self._send_json({"success": True, "output": _deploy()})
         elif path == "/api/regenerate":
-            self._send_json({"success": True, "output": _regenerate()})
+            silent = params.get("silent", ["0"])[0] == "1"
+            self._send_json({"success": True, "output": _regenerate(silent=silent)})
         else:
             self._send_json({"error": "not found"}, 404)
 
@@ -408,6 +412,11 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
         <button class="btn" id="poll-btn" onclick="manualPoll('heuristic')">Poll (Heuristic)</button>
         <button class="btn" id="poll-claude-btn" onclick="manualPoll('claude')">Poll (Claude)</button>
       </div>
+      <label class="toggle-row" style="display:flex;align-items:center;gap:8px;margin-top:10px;cursor:pointer;font-size:12px;color:var(--dim)">
+        <input type="checkbox" id="silent-toggle" checked>
+        <span>Suppress notifications</span>
+        <span style="font-size:11px;color:var(--faint)">(won't send to ntfy)</span>
+      </label>
       <div id="poll-output" class="log-box" style="display:none;max-height:250px"></div>
     </div>
 
@@ -509,6 +518,10 @@ function switchLog(service, btn) {
   refreshLogs();
 }
 
+function isSilent() {
+  return document.getElementById('silent-toggle').checked ? '1' : '0';
+}
+
 async function manualPoll(llm) {
   const btn = document.getElementById(llm === 'claude' ? 'poll-claude-btn' : 'poll-btn');
   const origText = btn.textContent;
@@ -518,7 +531,7 @@ async function manualPoll(llm) {
   out.style.display = 'block';
   out.textContent = 'Running...';
   try {
-    const data = await fetchJson(`/api/poll?llm=${llm}`, {method:'POST'});
+    const data = await fetchJson(`/api/poll?llm=${llm}&silent=${isSilent()}`, {method:'POST'});
     out.textContent = data.output || '(no output)';
     toast('Poll complete');
     refreshStatus();
@@ -549,7 +562,7 @@ async function regenerate() {
   out.style.display = 'block';
   out.textContent = 'Regenerating all patch pages...';
   try {
-    const data = await fetchJson('/api/regenerate', {method:'POST'});
+    const data = await fetchJson(`/api/regenerate?silent=${isSilent()}`, {method:'POST'});
     out.textContent = data.output || '(no output)';
     toast('Regeneration complete');
     refreshStatus();
